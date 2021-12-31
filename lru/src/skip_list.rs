@@ -14,6 +14,7 @@ mod skip_list {
 
     type BaseNodeInList<K, V> = Rc<RefCell<BaseNode<K, V>>>;
     type IndexNodeInList<K, V> = Rc<RefCell<IndexNode<K, V>>>;
+    use crate::rand::simple_rand;
 
 
     // lowest node  level=0
@@ -41,27 +42,38 @@ mod skip_list {
         indexes: Vec<IndexNodeInList<K, V>>,
         base_head: Option<BaseNodeInList<K, V>>,
         len: usize,
-        current_max_level: usize,
     }
 
-    struct VisitorHandle<'a, K: Copy + PartialOrd, V> {
-        skip_list: &'a SkipList<K, V>,
+    struct VisitorHandle<K: Copy + PartialOrd, V> {
         op: Operation,
         key: K,
         value: Option<V>,
         // some if overwrite
         old_value: Option<V>,
         index_nodes: Vec<IndexNodeInList<K, V>>,
+        max_level: usize,
     }
 
-    impl<'a, K: Copy + PartialOrd, V> VisitorHandle<'a, K, V> {
-        fn with_add_op(sk: &'a SkipList<K, V>, key: K, value: V) -> VisitorHandle<'a, K, V> {
-            VisitorHandle { skip_list: sk, op: Operation::Add, key, value: Some(value), old_value: None, index_nodes: vec![] }
+
+    fn max_level(len: usize) -> usize {
+        match len {
+            0 => 0,
+            _ => {
+                let num: f64 = len as f64;
+                num.log2().ceil() as usize
+            }
         }
-        fn random_level(max_level: usize) -> usize {
-            unimplemented!()
+    }
+
+
+    impl<K: Copy + PartialOrd, V> VisitorHandle<K, V> {
+        fn with_add_op(key: K, value: V, max_level: usize) -> VisitorHandle<K, V> {
+            VisitorHandle { op: Operation::Add, key, value: Some(value), old_value: None, index_nodes: vec![], max_level }
         }
-        fn handle_base_operation(&mut self, node: BaseNodeInList<K, V>) {
+        fn add_index_node(&mut self, node: IndexNodeInList<K, V>) {
+            self.index_nodes.push(node);
+        }
+        fn handle_operation(&mut self, node: BaseNodeInList<K, V>) {
             match self.op {
                 Operation::Add => {
                     let mut n = (node.borrow() as &RefCell<BaseNode<K, V>>).borrow_mut();
@@ -71,9 +83,10 @@ mod skip_list {
                     if self.key > node_key {
                         let right = n.right.clone();
                         let new_node = SkipList::new_base_node(self.key, self.value.take().unwrap(), right);
-                        // todo build index randomly
                         n.right = Some(new_node);
-                        // self.skip_list.len+=1;
+                        // get random level
+                        // build index node
+                        // fix index node right  on the search path
                     } else {
                         //     override exit node value
                     }
@@ -122,7 +135,7 @@ mod skip_list {
 
     impl<K: Copy + PartialOrd, V> SkipList<K, V> {
         pub fn new() -> SkipList<K, V> {
-            SkipList { indexes: Vec::new(), base_head: None, len: 0, current_max_level: 0 }
+            SkipList { indexes: Vec::new(), base_head: None, len: 0 }
         }
         pub fn to_iter(&self) -> SkipListIter<K, V> {
             SkipListIter { node: self.base_head.clone() }
@@ -133,9 +146,14 @@ mod skip_list {
                 let base_node = SkipList::new_base_node(key, value, None);
                 self.base_head = Some(base_node);
                 self.len += 1;
+
+                // get random level
+                // build index node
+                // add index node to indexs
                 return;
             }
             let head = self.get_head_base();
+            // insert to head
             if (head.borrow() as &RefCell<BaseNode<K, V>>).borrow().key.gt(&key) {
                 let new_node = SkipList::new_base_node(key, value, Some(head));
                 self.base_head = Some(new_node);
@@ -143,7 +161,7 @@ mod skip_list {
                 return;
             }
 
-            let mut visitor_handle = VisitorHandle::with_add_op(self, key, value);
+            let mut visitor_handle = VisitorHandle::with_add_op(key, value, max_level(self.len));
             if self.is_one_level() {
                 SkipList::visit_base(key, head, &mut visitor_handle);
                 if visitor_handle.old_value.is_none() { self.len += 1; }
@@ -155,20 +173,15 @@ mod skip_list {
             unimplemented!()
         }
         pub fn get(&self, key: K) -> Option<&V> {
-            // if self.is_empty() {
-            //     None
-            // }
-            // let n = self.top_head_index_node();
-            // if is empty
-            // SkipList::visit_level(key, n.unwrap(), |s| {}, |s| {});
+            // handle empty
+            // handle one level
+            // visit by visit handle
             unimplemented!()
         }
         pub fn remove(&mut self, key: K) {
-            // let n = self.top_head_index_node();
-            // if is empty
-            // SkipList::visit_level(key, n.unwrap(), |s| {}, |s| {});
-            // todo
-            // self.len-=1;
+            // handle empty
+            // handle one levels,len -=1
+            // visit by visit handle
             unimplemented!()
         }
 
@@ -176,7 +189,7 @@ mod skip_list {
             self.len
         }
 
-        // ---------private
+        // ---------private-------------
 
 
         fn visit_base(key: K, base_node: BaseNodeInList<K, V>, handle: &mut VisitorHandle<K, V>) {
@@ -193,18 +206,18 @@ mod skip_list {
                     break;
                 }
             }
-            handle.handle_base_operation(node);
+            handle.handle_operation(node);
         }
 
 
         fn visit_level(key: K, index_node: IndexNodeInList<K, V>, visitor_handle: &mut VisitorHandle<K, V>) {
+            visitor_handle.add_index_node(index_node.clone());
             let node = <SkipList<K, V>>::find_less_node(&key, index_node);
             let c = &(node.borrow() as &RefCell<IndexNode<K, V>>).borrow().child;
             match c {
                 IndexNodeChild::Base(t) => { SkipList::visit_base(key, t.clone(), visitor_handle) }
                 IndexNodeChild::Index(t) => { SkipList::visit_level(key, t.clone(), visitor_handle) }
             }
-            visitor_handle.handle_index_operation(node.clone());
         }
 
         fn find_less_node(key: &K, index_node: IndexNodeInList<K, V>) -> IndexNodeInList<K, V> {
@@ -250,6 +263,10 @@ mod skip_list {
         fn add_base(&mut self, node: &BaseNode<K, V>) {
             unimplemented!()
         }
+
+        fn random_level(&mut self, max_level: usize) -> usize {
+            unimplemented!()
+        }
     }
     // 1.  find nearest base node
     // a. handle emtpy list
@@ -258,17 +275,8 @@ mod skip_list {
     // 2. check base node one by one
 
 
-    fn max_level(len: usize) -> usize {
-        match len {
-            0 => 0,
-            _ => {
-                let num: f64 = len as f64;
-                num.log2().ceil() as usize
-            }
-        }
-    }
-
     #[cfg(test)]
+    // remember test head ,tail node and empty list
     mod test {
         use super::max_level;
         use crate::skip_list::skip_list::{SkipList};
@@ -277,7 +285,6 @@ mod skip_list {
         fn test_new_list() {
             let list: SkipList<i32, i32> = SkipList::new();
             assert_eq!(list.len, 0);
-            assert_eq!(list.current_max_level, 0);
             assert_eq!(list.indexes.len(), 0);
             assert_eq!(list.base_head.is_none(), true);
             //     create new skip list
@@ -307,12 +314,12 @@ mod skip_list {
         }
 
         #[test]
+        #[ignore]
         fn test_add_list() {
             let mut list: SkipList<i32, i32> = SkipList::new();
             list.add(1, 1);
             assert_eq!(1, list.len);
             assert_eq!(0, list.indexes.len());
-            assert_eq!(0, list.current_max_level);
             assert_eq!(true, list.base_head.is_some());
             assert_eq!(true, list.is_one_level());
 
@@ -328,13 +335,14 @@ mod skip_list {
         }
 
         #[test]
+        #[ignore]
         fn test_overwrite_list() {
-            // let mut list: SkipList<i32, i32> = SkipList::new();
-            // list.add(1, 1);
-            // list.add(2, 2);
-            // list.add(1, 2);
-            // assert_eq!(list.get(1).unwrap(), &2);
-            // assert_eq!(list.get(2).unwrap(), &2);
+            let mut list: SkipList<i32, i32> = SkipList::new();
+            list.add(1, 1);
+            list.add(2, 2);
+            list.add(1, 2);
+            assert_eq!(list.get(1).unwrap(), &2);
+            assert_eq!(list.get(2).unwrap(), &2);
         }
 
 
