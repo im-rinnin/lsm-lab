@@ -1,6 +1,6 @@
 pub mod simple_rand {
-    const A: u64 = 47;
-    const C: u64 = 113;
+    const A: u64 = 16807;
+    const C: u64 = 0;
     const M: u64 = i32::MAX as u64 - 1;
 
     struct Rand {
@@ -28,9 +28,9 @@ pub mod simple_rand {
         #[test]
         fn test() {
             let mut r = super::Rand::new();
-            assert_eq!(r.next(), 2087);
-            assert_eq!(r.next(), 98202);
-            assert_eq!(r.next(), 4615607);
+            assert_eq!(r.next(), 705894);
+            assert_eq!(r.next(), 1126542228);
+            assert_eq!(r.next(), 1579402860);
         }
     }
 }
