@@ -1,8 +1,16 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
+// todo add log debug, trace
+
 mod skip_list {
     use std::cell::{RefCell, Ref};
     use std::rc::Rc;
-    use std::borrow::{Borrow, BorrowMut};
-    use std::ops::DerefMut;
+    use std::borrow::{Borrow};
+    use std::ops::{Deref, DerefMut};
+    use std::alloc::handle_alloc_error;
+    use std::fs::read_to_string;
+    use std::fmt::Display;
 
     type BaseNodeInList<K, V> = Rc<RefCell<BaseNode<K, V>>>;
     type IndexNodeInList<K, V> = Rc<RefCell<IndexNode<K, V>>>;
@@ -10,8 +18,8 @@ mod skip_list {
 
     // lowest node  level=0
     struct BaseNode<K: Copy + PartialOrd, V> {
-        key: K,
-        value: V,
+        pub key: K,
+        pub value: V,
         right: Option<BaseNodeInList<K, V>>,
     }
 
@@ -24,82 +32,188 @@ mod skip_list {
 
 
     enum IndexNodeChild<K: Copy + PartialOrd, V> {
-        base(BaseNodeInList<K, V>),
-        index(IndexNodeInList<K, V>),
+        Base(BaseNodeInList<K, V>),
+        Index(IndexNodeInList<K, V>),
     }
 
     struct SkipList<K: Copy + PartialOrd, V> {
         // head_bass_node: Option<BaseNode<K, V>>,
         indexes: Vec<IndexNodeInList<K, V>>,
+        base_head: Option<BaseNodeInList<K, V>>,
         len: usize,
         current_max_level: usize,
     }
 
-    impl<K: Copy + PartialOrd, V> SkipList<K, V> {
-        // need handle overrite todo
-        pub fn add(&mut self, key: K, value: V) {
-            let n = self.top_head_index_node();
-            if n.is_none() {
-                // let node =
-            }
-            // if is empty
-            // todo funciton
-            SkipList::visit_level(key, n.unwrap(), |s| {}, SkipList::add_base);
+    struct VisitorHandle<'a, K: Copy + PartialOrd, V> {
+        skip_list: &'a SkipList<K, V>,
+        op: Operation,
+        key: K,
+        value: Option<V>,
+        // some if overwrite
+        old_value: Option<V>,
+        index_nodes: Vec<IndexNodeInList<K, V>>,
+    }
+
+    impl<'a, K: Copy + PartialOrd, V> VisitorHandle<'a, K, V> {
+        fn with_add_op(sk: &'a SkipList<K, V>, key: K, value: V) -> VisitorHandle<'a, K, V> {
+            VisitorHandle { skip_list: sk, op: Operation::Add, key, value: Some(value), old_value: None, index_nodes: vec![] }
+        }
+        fn random_level(max_level: usize) -> usize {
             unimplemented!()
         }
-        pub fn get(&self, key: K) {
-            let n = self.top_head_index_node();
+        fn handle_base_operation(&mut self, node: BaseNodeInList<K, V>) {
+            match self.op {
+                Operation::Add => {
+                    let mut n = (node.borrow() as &RefCell<BaseNode<K, V>>).borrow_mut();
+                    let node_key = n.key;
+                    assert!(self.key >= node_key);
+                    // add
+                    if self.key > node_key {
+                        let right = n.right.clone();
+                        let new_node = SkipList::new_base_node(self.key, self.value.take().unwrap(), right);
+                        // todo build index randomly
+                        n.right = Some(new_node);
+                        // self.skip_list.len+=1;
+                    } else {
+                        //     override exit node value
+                    }
+                }
+                Operation::Set => {}
+                Operation::Remove => {}
+            }
+        }
+        fn handle_index_operation(&self, node: IndexNodeInList<K, V>) {}
+    }
+
+    #[derive(Copy, Clone)]
+    enum Operation {
+        Add,
+        Set,
+        Remove,
+    }
+
+    struct SkipListIter<K: Copy + PartialOrd, V> {
+        node: Option<BaseNodeInList<K, V>>,
+    }
+
+
+    impl<K: Copy + PartialOrd, V> Iterator for SkipListIter<K, V> {
+        type Item = BaseNodeInList<K, V>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let current = self.node.take();
+            match current {
+                Some(n) => {
+                    self.node = (n.borrow() as &RefCell<BaseNode<K, V>>).borrow().right.clone();
+                    Some(n)
+                }
+                None => {
+                    None
+                }
+            }
+        }
+    }
+
+    impl<K: Copy + PartialOrd + Display, V: Display> SkipList<K, V> {
+        pub fn to_graph() -> String {
+            String::from("todo")
+        }
+    }
+
+    impl<K: Copy + PartialOrd, V> SkipList<K, V> {
+        pub fn new() -> SkipList<K, V> {
+            SkipList { indexes: Vec::new(), base_head: None, len: 0, current_max_level: 0 }
+        }
+        pub fn to_iter(&self) -> SkipListIter<K, V> {
+            SkipListIter { node: self.base_head.clone() }
+        }
+        // need handle overrite todo
+        pub fn add(&mut self, key: K, value: V) {
+            if self.is_empty() {
+                let base_node = SkipList::new_base_node(key, value, None);
+                self.base_head = Some(base_node);
+                self.len += 1;
+                return;
+            }
+            let head = self.get_head_base();
+            if (head.borrow() as &RefCell<BaseNode<K, V>>).borrow().key.gt(&key) {
+                let new_node = SkipList::new_base_node(key, value, Some(head));
+                self.base_head = Some(new_node);
+                self.len += 1;
+                return;
+            }
+
+            let mut visitor_handle = VisitorHandle::with_add_op(self, key, value);
+            if self.is_one_level() {
+                SkipList::visit_base(key, head, &mut visitor_handle);
+                if visitor_handle.old_value.is_none() { self.len += 1; }
+                return;
+            }
+            SkipList::visit_level(key, self.get_head_index(), &mut visitor_handle);
+            // todo add 1 if add succese
+            // self.len++1;
+            unimplemented!()
+        }
+        pub fn get(&self, key: K) -> Option<&V> {
+            // if self.is_empty() {
+            //     None
+            // }
+            // let n = self.top_head_index_node();
             // if is empty
-            SkipList::visit_level(key, n.unwrap(), |s| {}, |s| {});
+            // SkipList::visit_level(key, n.unwrap(), |s| {}, |s| {});
             unimplemented!()
         }
         pub fn remove(&mut self, key: K) {
-            let n = self.top_head_index_node();
+            // let n = self.top_head_index_node();
             // if is empty
-            SkipList::visit_level(key, n.unwrap(), |s| {}, |s| {});
+            // SkipList::visit_level(key, n.unwrap(), |s| {}, |s| {});
+            // todo
+            // self.len-=1;
             unimplemented!()
         }
 
-        fn visit_base(key: K, base_node: BaseNodeInList<K, V>, f: fn(&mut BaseNode<K, V>)) {
+        pub fn len(&self) -> usize {
+            self.len
+        }
+
+        // ---------private
+
+
+        fn visit_base(key: K, base_node: BaseNodeInList<K, V>, handle: &mut VisitorHandle<K, V>) {
             let mut node: BaseNodeInList<K, V> = base_node.clone();
+
             loop {
-                let mut n = (node.borrow() as (&RefCell<BaseNode<K, V>> )).borrow();
+                let n = (node.borrow() as &RefCell<BaseNode<K, V>>).borrow();
                 let current_key = n.key;
-                if current_key.le(&key) && n.right.is_some() {
-                    let mut t = n.right.as_ref().unwrap().clone();
+                if current_key.lt(&key) && n.right.is_some() {
+                    let t = n.right.as_ref().unwrap().clone();
                     drop(n);
                     node = t;
-                    // std::mem::swap(&mut node, &mut t);
                 } else {
                     break;
                 }
-                // let d=n.right.borrow().unwrap();
             }
-            f((node.borrow() as (&RefCell<BaseNode<K, V>> )).borrow_mut().deref_mut());
-            // let mut node: IndexNodeInList = index_node.clone();
-            // loop{
-            //
-            // }
+            handle.handle_base_operation(node);
         }
 
 
-        fn visit_level(key: K, index_node: IndexNodeInList<K, V>, f: fn(IndexNodeInList<K, V>), f2: fn(&mut BaseNode<K, V>)) {
-            let node = <SkipList<K, V>>::findLessNode(&key, index_node);
-            let c = &(node.borrow() as (&RefCell<IndexNode<K, V>> )).borrow().child;
+        fn visit_level(key: K, index_node: IndexNodeInList<K, V>, visitor_handle: &mut VisitorHandle<K, V>) {
+            let node = <SkipList<K, V>>::find_less_node(&key, index_node);
+            let c = &(node.borrow() as &RefCell<IndexNode<K, V>>).borrow().child;
             match c {
-                IndexNodeChild::base(t) => { SkipList::visit_base(key, t.clone(), f2) }
-                IndexNodeChild::index(t) => { SkipList::visit_level(key, t.clone(), f, f2) }
+                IndexNodeChild::Base(t) => { SkipList::visit_base(key, t.clone(), visitor_handle) }
+                IndexNodeChild::Index(t) => { SkipList::visit_level(key, t.clone(), visitor_handle) }
             }
-            // f(node.clone())
+            visitor_handle.handle_index_operation(node.clone());
         }
 
-        fn findLessNode(key: &K, index_node: IndexNodeInList<K, V>) -> IndexNodeInList<K, V> {
+        fn find_less_node(key: &K, index_node: IndexNodeInList<K, V>) -> IndexNodeInList<K, V> {
             let mut node: IndexNodeInList<K, V> = index_node.clone();
             loop {
-                let mut n = (node.borrow() as (&RefCell<IndexNode<K, V>> )).borrow();
+                let n = (node.borrow() as &RefCell<IndexNode<K, V>>).borrow();
                 let current_key = n.key;
-                if current_key.le(&key) && n.right.is_some() {
-                    let mut t = n.right.as_ref().unwrap().clone();
+                if current_key.lt(&key) && n.right.is_some() {
+                    let t = n.right.as_ref().unwrap().clone();
                     drop(n);
                     node = t;
                     // std::mem::swap(&mut node, &mut t);
@@ -110,14 +224,20 @@ mod skip_list {
             }
             node
         }
-        fn top_head_index_node(&self) -> Option<IndexNodeInList<K, V>> {
-            let node = self.indexes.get(self.current_max_level).unwrap();
-            let s = (node.borrow() as (&RefCell<IndexNode<K, V>> )).borrow();
-            if s.right.is_none() {
-                return None;
-            }
-            let res = s.right.as_ref().unwrap().clone();
-            Some(res)
+        fn is_empty(&self) -> bool {
+            self.len == 0
+        }
+
+        fn is_one_level(&self) -> bool {
+            self.indexes.len() == 0
+        }
+
+        fn get_head_base(&self) -> BaseNodeInList<K, V> {
+            self.base_head.as_ref().unwrap().clone()
+        }
+
+        fn get_head_index(&self) -> IndexNodeInList<K, V> {
+            unimplemented!()
         }
 
         fn new_index_node(key: K, right: Option<IndexNodeInList<K, V>>, child: IndexNodeChild<K, V>) -> IndexNodeInList<K, V> {
@@ -127,7 +247,7 @@ mod skip_list {
             Rc::new(RefCell::new(BaseNode { key, value, right }))
         }
 
-        fn add_base(node: &mut BaseNode<K, V>) {
+        fn add_base(&mut self, node: &BaseNode<K, V>) {
             unimplemented!()
         }
     }
@@ -151,16 +271,72 @@ mod skip_list {
     #[cfg(test)]
     mod test {
         use super::max_level;
+        use crate::skip_list::skip_list::{SkipList};
 
+        #[test]
         fn test_new_list() {
+            let list: SkipList<i32, i32> = SkipList::new();
+            assert_eq!(list.len, 0);
+            assert_eq!(list.current_max_level, 0);
+            assert_eq!(list.indexes.len(), 0);
+            assert_eq!(list.base_head.is_none(), true);
             //     create new skip list
             //     check fielda lens ,indexs etc
         }
 
+        #[test]
+        fn test_iter_list() {
+            let mut list: SkipList<i32, i32> = SkipList::new();
+            list.add(1, 1);
+            list.add(2, 2);
+            list.add(0, 0);
+            list.add(3, 3);
+            list.add(-1, -1);
+            list.add(-2, -2);
+            list.add(4, 4);
+            let mut iter = list.to_iter();
+            assert_eq!((&iter.next().unwrap().borrow().key), &-2);
+            assert_eq!((&iter.next().unwrap().borrow().key), &-1);
+            assert_eq!((&iter.next().unwrap().borrow().key), &0);
+            assert_eq!((&iter.next().unwrap().borrow().key), &1);
+            assert_eq!((&iter.next().unwrap().borrow().key), &2);
+            assert_eq!((&iter.next().unwrap().borrow().key), &3);
+            assert_eq!((&iter.next().unwrap().borrow().key), &4);
+            assert_eq!(iter.next().is_none(), true);
+            assert_eq!(list.len, 7)
+        }
+
+        #[test]
         fn test_add_list() {
+            let mut list: SkipList<i32, i32> = SkipList::new();
+            list.add(1, 1);
+            assert_eq!(1, list.len);
+            assert_eq!(0, list.indexes.len());
+            assert_eq!(0, list.current_max_level);
+            assert_eq!(true, list.base_head.is_some());
+            assert_eq!(true, list.is_one_level());
+
+            list.add(2, 2);
+            assert_eq!(2, list.len);
+            assert_eq!(list.get(2).unwrap(), &2);
+            assert_eq!(list.get(1).unwrap(), &1);
+
+            list.add(-1, 2);
+
             //     add k,v to list
             //     check field
         }
+
+        #[test]
+        fn test_overwrite_list() {
+            // let mut list: SkipList<i32, i32> = SkipList::new();
+            // list.add(1, 1);
+            // list.add(2, 2);
+            // list.add(1, 2);
+            // assert_eq!(list.get(1).unwrap(), &2);
+            // assert_eq!(list.get(2).unwrap(), &2);
+        }
+
 
         fn test_remove_list() {
             //     remove from list
