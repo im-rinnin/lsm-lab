@@ -9,11 +9,12 @@ mod debug {
         a: T,
     }
 
-    impl<T> A<T> {
-        fn foo() -> usize {
-            3
+    impl<T> Drop for A<T> {
+        fn drop(&mut self) {
+            println!("hi");
         }
     }
+
 
     impl<T: Display> A<T> {
         fn print(&self) -> &str {
@@ -24,11 +25,16 @@ mod debug {
     #[cfg(test)]
     mod test {
         use super::A;
+        use std::thread::spawn;
+        use std::sync::{Arc, Mutex};
+        use std::cell::RefCell;
+        use std::borrow::Borrow;
 
         #[test]
         fn test() {
-            let a = A { a: 3 };
-            a.print();
+            let a = Box::new(A { a: 3 });
+            let b = Box::into_raw(a);
+            unsafe {Box::from_raw(b);}
         }
     }
 }
