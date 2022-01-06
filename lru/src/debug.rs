@@ -15,7 +15,6 @@ mod debug {
         }
     }
 
-
     impl<T: Display> A<T> {
         fn print(&self) -> &str {
             "dsf"
@@ -25,16 +24,17 @@ mod debug {
     #[cfg(test)]
     mod test {
         use super::A;
-        use std::thread::spawn;
-        use std::sync::{Arc, Mutex};
-        use std::cell::RefCell;
         use std::borrow::Borrow;
+        use std::cell::RefCell;
+        use std::sync::atomic::AtomicPtr;
+        use std::sync::{Arc, Mutex};
+        use std::thread::spawn;
 
         #[test]
         fn test() {
             let a = Box::new(A { a: 3 });
             let b = Box::into_raw(a);
-            unsafe {Box::from_raw(b);}
+            let m = AtomicPtr::new(b);
         }
     }
 }
