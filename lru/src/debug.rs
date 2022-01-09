@@ -26,15 +26,28 @@ mod debug {
         use super::A;
         use std::borrow::Borrow;
         use std::cell::RefCell;
-        use std::sync::atomic::AtomicPtr;
+        use std::ptr::slice_from_raw_parts_mut;
+        use std::sync::atomic::{AtomicI8, AtomicPtr, Ordering};
         use std::sync::{Arc, Mutex};
         use std::thread::spawn;
 
         #[test]
         fn test() {
-            let a = Box::new(A { a: 3 });
-            let b = Box::into_raw(a);
-            let m = AtomicPtr::new(b);
+            // let lock = Arc::new(AtomicI8::new(1));
+            //
+            // let mut jv = vec![];
+            // for i in 1..10 {
+            //     let lock_c = lock.clone();
+            //     let j = spawn(move || {
+            //         let s = lock_c.fetch_add(1, Ordering::SeqCst);
+            //         println!("{}", s);
+            //     });
+            //     jv.push(j);
+            // }
+            // for i in 1..10 {
+            //     let j = jv.pop();
+            //     j.unwrap().join();
+            // }
         }
     }
 }
