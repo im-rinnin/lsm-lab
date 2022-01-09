@@ -33,6 +33,12 @@ mod debug {
 
         #[test]
         fn test() {
+            let mut a = vec![];
+            a.push(23);
+            a.push(23);
+            a.push(23);
+            let mut m = a.iter();
+            let s = m.next();
             // let lock = Arc::new(AtomicI8::new(1));
             //
             // let mut jv = vec![];

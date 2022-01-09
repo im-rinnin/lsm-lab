@@ -57,8 +57,7 @@ impl<K: Copy + PartialOrd, V> Node<K, V> {
     pub fn get_next(&self) -> *mut Self {
         self.next_ptr.load(Ordering::SeqCst)
     }
-    pub fn cas_next_ptr(&self, new_ptr: *mut Self) -> bool {
-        let current_ptr = self.next_ptr.load(Ordering::SeqCst);
+    pub fn cas_next_ptr(&self, current_ptr: *mut Self, new_ptr: *mut Self) -> bool {
         let res = self.next_ptr.compare_exchange(
             current_ptr,
             new_ptr,

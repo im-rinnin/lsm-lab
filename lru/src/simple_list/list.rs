@@ -8,16 +8,47 @@ use std::fs::read_to_string;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicI64, AtomicI8, AtomicPtr, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 use crate::simple_list::node::Node;
 use std::cell::RefCell;
+use std::fmt::Display;
 use std::hash::Hash;
 
 struct List<K: Copy + PartialOrd, V> {
     head: AtomicPtr<Node<K, V>>,
     lock: Arc<RwLock<()>>,
+}
+
+struct ListIterator<'a, K: Copy + PartialOrd, V> {
+    lock: RwLockReadGuard<'a, ()>,
+    node: *mut Node<K, V>,
+}
+
+impl<'a, K: Copy + PartialOrd, V> ListIterator<'a, K, V> {
+    pub fn new(list: &'a List<K, V>) -> Self {
+        let rd_lock = list.lock.read().unwrap();
+        ListIterator {
+            lock: rd_lock,
+            node: list.head.load(Ordering::SeqCst),
+        }
+    }
+}
+
+impl<'a, K: 'a + Copy + PartialOrd, V: 'a> Iterator for ListIterator<'a, K, V> {
+    type Item = &'a Node<K, V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match !self.node.is_null() {
+            true => unsafe {
+                let res = self.node.as_ref().unwrap();
+                self.node = res.get_next();
+                Some(res)
+            },
+            false => None,
+        }
+    }
 }
 
 impl<K: Copy + PartialOrd, V> List<K, V> {
@@ -32,6 +63,22 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         unimplemented!()
     }
 
+    pub fn len(&self) -> isize {
+        let read = self.lock.read().unwrap();
+        let mut res = 0;
+        let mut node_ptr = self.head.load(Ordering::SeqCst);
+        loop {
+            if node_ptr.is_null() {
+                break;
+            }
+            res += 1;
+            unsafe {
+                node_ptr = node_ptr.as_ref().unwrap().get_next();
+            }
+        }
+        return res;
+    }
+
     pub fn add(&self, key: K, value: V) {
         // lock
         let read_lock = self.lock.read().unwrap();
@@ -44,10 +91,10 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         }
         let mut start_node = self.head.load(Ordering::SeqCst);
         loop {
-            let found_node = self.get_node_eq_or_less(key, start_node);
-            match found_node {
+            let found_res = self.get_node_eq_or_less(key, start_node);
+            match found_res {
                 // key match, overwrite value
-                Some(n) => {
+                Some((n, current_next)) => {
                     // set next loop start_node to current found node
                     start_node = n;
                     assert!(n.get_key() <= key);
@@ -69,13 +116,11 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                     } else {
                         // try insert
                         assert!(n.get_key() < key);
-                        // set next ptr
-                        let next_ptr = n.get_next();
                         unsafe {
-                            new_node_ptr.as_mut().unwrap().set_next_ptr(next_ptr);
+                            new_node_ptr.as_mut().unwrap().set_next_ptr(current_next);
                         }
                         // try cas
-                        let cas_res = n.cas_next_ptr(new_node_ptr);
+                        let cas_res = n.cas_next_ptr(current_next, new_node_ptr);
                         if cas_res {
                             return;
                         }
@@ -125,6 +170,10 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         unimplemented!()
     }
 
+    pub fn to_iter(&self) -> ListIterator<K, V> {
+        ListIterator::new(self)
+    }
+
     // --------------------------private-----------------
 
     // check if need check
@@ -140,7 +189,11 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
     }
 
     // need to check if deleted
-    fn get_node_eq_or_less(&self, key: K, start_node: *mut Node<K, V>) -> Option<&mut Node<K, V>> {
+    fn get_node_eq_or_less(
+        &self,
+        key: K,
+        start_node: *mut Node<K, V>,
+    ) -> Option<(&mut Node<K, V>, *mut Node<K, V>)> {
         let mut node_ptr = start_node;
         if node_ptr.is_null() {
             return None;
@@ -154,12 +207,13 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
             let mut last_node_ptr = node_ptr;
 
             loop {
+                let res = Some((last_node_ptr.as_mut().unwrap(), node_ptr));
                 if node_ptr.is_null() {
-                    return Some(last_node_ptr.as_mut().unwrap());
+                    return res;
                 }
                 let node_key = node_ptr.as_ref().unwrap().get_key();
                 if node_key > key {
-                    return Some(last_node_ptr.as_mut().unwrap());
+                    return res;
                 }
                 last_node_ptr = node_ptr;
                 node_ptr = node_ptr.as_ref().unwrap().get_next();
@@ -167,19 +221,37 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         }
     }
 }
-impl<K: Copy + PartialOrd, V: Clone> List<K, V> {
+impl<K: Copy + PartialOrd + Display, V: Clone + Display> List<K, V> {
     fn get(&self, key: K) -> Option<V> {
         let read_lock = self.lock.read().unwrap();
         let res = self.get_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
-        res.map(|n| n.get_value())
+        if let Some(n) = res {
+            if n.0.get_key() == key {
+                return Some(n.0.get_value());
+            }
+        }
+        return None;
+    }
+
+    fn to_str(&self) -> String {
+        let iter = self.to_iter();
+        let mut res = String::new();
+        for i in iter {
+            let s = format!("({}:{})", i.get_key(), i.get_value());
+            res.push_str(s.as_str());
+        }
+        res
     }
 }
 
 #[cfg(test)]
 mod test {
     use crate::simple_list::list;
+    use std::env::temp_dir;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::thread::spawn;
+    use std::time::Duration;
 
     #[test]
     fn test_one_write() {
@@ -192,24 +264,53 @@ mod test {
     #[test]
     fn test_five_write() {}
     #[test]
+    fn test_order() {
+        let list = list::List::new();
+        list.add(3, 3);
+        list.add(1, 1);
+        list.add(5, 5);
+        list.add(0, 0);
+        assert_eq!(list.to_str(), "(0:0)(1:1)(3:3)(5:5)");
+    }
+    #[test]
+    fn test_10_times() {
+        for i in 0..10 {
+            test_multiple_write_and_read();
+        }
+    }
+
     fn test_multiple_write_and_read() {
         let list = Arc::new(list::List::new());
         let mut joins = vec![];
-        // list.add(-1, -1);
-        for i in 1..100 {
+
+        for i in 0..100 {
             let list_clone = list.clone();
             // list_clone.add(i, i);
             let join = spawn(move || {
-                list_clone.add(i, i * 1000);
+                list_clone.add(i, i);
             });
             joins.push(join);
         }
-        for i in 1..100 {
-            joins.pop().unwrap().join().unwrap();
+        // overwrite
+        for i in (0..100).step_by(2) {
+            let list_clone = list.clone();
+            // list_clone.add(i, i);
+            let join = spawn(move || {
+                list_clone.add(i, i * 100);
+            });
+            joins.push(join);
         }
 
-        for i in 1..100 {
-            assert_eq!(list.get(i).unwrap(), i * 1000);
+        for j in joins {
+            j.join().unwrap();
+        }
+
+        for i in 0..100 {
+            if i % 2 == 0 {
+                assert_eq!(list.get(i).unwrap(), i * 100);
+            } else {
+                assert_eq!(list.get(i).unwrap(), i);
+            }
         }
     }
     #[test]
