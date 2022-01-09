@@ -127,9 +127,9 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                             // clean value ptr
                             new_node_ptr.as_mut().unwrap().set_value(null_mut());
                             n.set_value(value_ptr);
+                            // drop node
+                            new_node_ptr.drop_in_place();
                         }
-                        // drop node
-                        drop(new_node_ptr);
                         break;
                     } else {
                         // try insert
