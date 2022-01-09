@@ -8,7 +8,7 @@ use std::fs::read_to_string;
 use std::ptr::{null, null_mut};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicI64, AtomicI8, AtomicPtr, Ordering};
-use std::sync::{Arc, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
 use crate::simple_list::node::test::Item;
@@ -18,9 +18,14 @@ use std::cell::RefCell;
 use std::fmt::Display;
 use std::hash::Hash;
 
+const GC_THRESHOLD: i64 = 100;
+
 struct List<K: Copy + PartialOrd, V> {
     head: AtomicPtr<Node<K, V>>,
     lock: Arc<RwLock<()>>,
+    gc_lock: Arc<Mutex<()>>,
+    deleted_counter: AtomicI64,
+    gc_threshold: i64,
 }
 
 struct ListIterator<'a, K: Copy + PartialOrd, V> {
@@ -54,10 +59,22 @@ impl<'a, K: 'a + Copy + PartialOrd, V: 'a> Iterator for ListIterator<'a, K, V> {
 }
 
 impl<K: Copy + PartialOrd, V> List<K, V> {
+    pub fn with_gc_threshold(threshold: i64) -> List<K, V> {
+        List {
+            head: AtomicPtr::new(null_mut()),
+            lock: Arc::new(RwLock::new(())),
+            gc_lock: Arc::new(Mutex::new(())),
+            deleted_counter: AtomicI64::new(0),
+            gc_threshold: threshold,
+        }
+    }
     pub fn new() -> List<K, V> {
         List {
             head: AtomicPtr::new(null_mut()),
             lock: Arc::new(RwLock::new(())),
+            gc_lock: Arc::new(Mutex::new(())),
+            deleted_counter: AtomicI64::new(0),
+            gc_threshold: GC_THRESHOLD,
         }
     }
 
@@ -149,15 +166,6 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                 }
             }
         }
-        // todo check if need gc fetch gc lock ,do gc
-        //     1. check if need gc
-        if self.need_gc() {
-            if self.fetch_gc_lock() {
-                self.gc()
-            }
-        }
-        //     2. try to fetch gc lock
-        //     3. success do gc
     }
 
     pub fn delete(&self, key: K) {
@@ -167,6 +175,19 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         let node = self.get_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
         if let Some((n, b)) = node {
             n.set_deleted();
+            let count = self.deleted_counter.fetch_add(1, Ordering::SeqCst);
+            // need drop lock first, gc need write lock
+            drop(read_lock);
+            // do gc if need
+            if count > self.gc_threshold {
+                // only one thread can do gc
+                let gc_lock = self.gc_lock.try_lock();
+                if gc_lock.is_ok() {
+                    let gc_count = self.gc();
+                    self.deleted_counter
+                        .fetch_sub(gc_count as i64, Ordering::SeqCst);
+                }
+            }
         }
     }
 
@@ -176,24 +197,14 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
 
     // --------------------------private-----------------
 
-    // check if need check
-    // lock gc prevent other thread do gc
-    fn need_gc(&self) -> bool {
-        // check if need gc
-        false
-    }
-
-    fn fetch_gc_lock(&self) -> bool {
-        true
-    }
-
     // lock list stop other thread access until gc finish
-    fn gc(&self) {
+    fn gc(&self) -> i32 {
         let w_lock = self.lock.write().unwrap();
+        let mut gc_count = 0;
         // check if is null
         let head_ptr = self.head.load(Ordering::SeqCst);
         if head_ptr.is_null() {
-            return;
+            return gc_count;
         }
         // find first node is not delete
         let mut node_ptr = head_ptr;
@@ -209,13 +220,14 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                 }
                 // delete node if is delete
                 node_ptr.drop_in_place();
+                gc_count += 1;
 
                 node_ptr = node.get_next();
             }
         }
 
         if node_ptr.is_null() {
-            return;
+            return gc_count;
         }
         let first_live_node_ptr = node_ptr;
 
@@ -231,6 +243,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                     //     drop current node
                     // drop(current_node);
                     current_node_ptr.drop_in_place();
+                    gc_count += 1;
                     //     set next node
                     current_node_ptr = current_node.get_next();
                 } else {
@@ -239,6 +252,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                 }
             }
         }
+        return gc_count;
     }
 
     // need to check if deleted
@@ -307,7 +321,6 @@ mod test {
     use std::env::temp_dir;
     use std::rc::Rc;
     use std::sync::atomic::Ordering;
-    use std::sync::mpsc::{Receiver, Sender};
     use std::sync::{mpsc, Arc};
     use std::thread::spawn;
     use std::time::Duration;
@@ -409,7 +422,7 @@ mod test {
     #[test]
     fn test_empty_list_gc() {
         let list: List<i32, i32> = list::List::new();
-        list.gc();
+        assert_eq!(list.gc(), 0);
     }
     #[test]
     fn test_only_gc() {
@@ -424,13 +437,32 @@ mod test {
         list.delete(1);
         list.delete(3);
         assert_eq!(list.len(), 3);
-        list.gc();
+        assert_eq!(list.gc(), 3);
         assert_eq!(*(count.borrow() as &RefCell<i32>).borrow_mut(), 3);
     }
     #[test]
     fn test_all() {}
     #[test]
-    fn test_gc() {
+    fn test_gc_with_gc_checker() {
+        let list = list::List::with_gc_threshold(3);
+        let list_cloned = Arc::new(list);
+        let mut joins = vec![];
+        for i in 0..6 {
+            let l = list_cloned.clone();
+            joins.push(spawn(move || {
+                l.add(i, i);
+                if i % 2 == 0 {
+                    l.delete(i);
+                }
+            }))
+        }
+
+        for i in joins {
+            i.join().unwrap();
+        }
+
+        assert_eq!(list_cloned.deleted_counter.load(Ordering::SeqCst), 3);
+
         //     add count to drop, check node gc is working ,no memory leak
     }
 }
