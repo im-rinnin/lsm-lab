@@ -11,7 +11,9 @@ use std::sync::atomic::{AtomicI64, AtomicI8, AtomicPtr, Ordering};
 use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::Duration;
 
+use crate::simple_list::node::test::Item;
 use crate::simple_list::node::Node;
+use std::alloc::handle_alloc_error;
 use std::cell::RefCell;
 use std::fmt::Display;
 use std::hash::Hash;
@@ -67,9 +69,12 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
             if node_ptr.is_null() {
                 break;
             }
-            res += 1;
             unsafe {
-                node_ptr = node_ptr.as_ref().unwrap().get_next();
+                let node = node_ptr.as_ref().unwrap();
+                if !node.is_deleted() {
+                    res += 1;
+                }
+                node_ptr = node.get_next();
             }
         }
         return res;
@@ -145,6 +150,14 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
             }
         }
         // todo check if need gc fetch gc lock ,do gc
+        //     1. check if need gc
+        if self.need_gc() {
+            if self.fetch_gc_lock() {
+                self.gc()
+            }
+        }
+        //     2. try to fetch gc lock
+        //     3. success do gc
     }
 
     pub fn delete(&self, key: K) {
@@ -166,13 +179,66 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
     // check if need check
     // lock gc prevent other thread do gc
     fn need_gc(&self) -> bool {
-        unimplemented!()
+        // check if need gc
+        false
+    }
+
+    fn fetch_gc_lock(&self) -> bool {
+        true
     }
 
     // lock list stop other thread access until gc finish
     fn gc(&self) {
-        //
-        unimplemented!()
+        let w_lock = self.lock.write().unwrap();
+        // check if is null
+        let head_ptr = self.head.load(Ordering::SeqCst);
+        if head_ptr.is_null() {
+            return;
+        }
+        // find first node is not delete
+        let mut node_ptr = head_ptr;
+        loop {
+            // not found
+            if node_ptr.is_null() {
+                break;
+            }
+            unsafe {
+                let node = node_ptr.as_ref().unwrap();
+                if !node.is_deleted() {
+                    break;
+                }
+                // delete node if is delete
+                node_ptr.drop_in_place();
+
+                node_ptr = node.get_next();
+            }
+        }
+
+        if node_ptr.is_null() {
+            return;
+        }
+        let first_live_node_ptr = node_ptr;
+
+        unsafe {
+            let mut last_node_ptr = node_ptr;
+            let mut current_node_ptr = node_ptr.as_ref().unwrap().get_next();
+            while !current_node_ptr.is_null() {
+                let current_node = current_node_ptr.as_ref().unwrap();
+                if current_node.is_deleted() {
+                    // update last node ptr
+                    let last_node = last_node_ptr.as_mut().unwrap();
+                    last_node.set_next_ptr(current_node.get_next());
+                    //     drop current node
+                    // drop(current_node);
+                    current_node_ptr.drop_in_place();
+                    //     set next node
+                    current_node_ptr = current_node.get_next();
+                } else {
+                    last_node_ptr = current_node_ptr;
+                    current_node_ptr = current_node.get_next();
+                }
+            }
+        }
     }
 
     // need to check if deleted
@@ -234,9 +300,12 @@ impl<K: Copy + PartialOrd + Display, V: Clone + Display> List<K, V> {
 #[cfg(test)]
 mod test {
     use crate::simple_list::list;
-    use std::borrow::BorrowMut;
+    use crate::simple_list::list::List;
+    use crate::simple_list::node::test::Item;
+    use std::borrow::{Borrow, BorrowMut};
     use std::cell::RefCell;
     use std::env::temp_dir;
+    use std::rc::Rc;
     use std::sync::atomic::Ordering;
     use std::sync::mpsc::{Receiver, Sender};
     use std::sync::{mpsc, Arc};
@@ -313,6 +382,7 @@ mod test {
         list.delete(1);
         list.delete(1);
         assert!(list.get(1).is_none());
+        assert_eq!(list.len(), 0);
     }
     #[test]
     fn test_remove_get_in_two_thread() {
@@ -326,7 +396,37 @@ mod test {
         assert!(list.get(1).is_none());
     }
     #[test]
-    fn test_only_gc() {}
+    fn test_list_gc_all_node_is_deleted() {
+        let list: List<i32, i32> = list::List::new();
+        list.add(1, 1);
+        list.add(2, 1);
+        list.add(3, 1);
+        list.delete(3);
+        list.delete(1);
+        list.delete(2);
+        assert_eq!(list.len(), 0);
+    }
+    #[test]
+    fn test_empty_list_gc() {
+        let list: List<i32, i32> = list::List::new();
+        list.gc();
+    }
+    #[test]
+    fn test_only_gc() {
+        let count = Rc::new(RefCell::new(0));
+        let list = list::List::new();
+        // (delete)->(delete)->(alive)->(delete)->(alive)->(alive)
+        for i in 0..6 {
+            let item = Item::new(count.clone());
+            list.add(i, item);
+        }
+        list.delete(0);
+        list.delete(1);
+        list.delete(3);
+        assert_eq!(list.len(), 3);
+        list.gc();
+        assert_eq!(*(count.borrow() as &RefCell<i32>).borrow_mut(), 3);
+    }
     #[test]
     fn test_all() {}
     #[test]

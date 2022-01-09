@@ -10,7 +10,6 @@ pub struct Node<K: Copy + PartialOrd, V> {
     key: Arc<K>,
     value: AtomicPtr<V>,
     next_ptr: AtomicPtr<Node<K, V>>,
-    gc_ptr: AtomicPtr<Node<K, V>>,
     state: AtomicI8,
 }
 
@@ -20,7 +19,6 @@ impl<K: Copy + PartialOrd, V> Node<K, V> {
             key: Arc::new(key),
             value: AtomicPtr::new(null_mut()),
             next_ptr: AtomicPtr::new(null_mut()),
-            gc_ptr: AtomicPtr::new(null_mut()),
             state: AtomicI8::new(0),
         }
     }
@@ -29,7 +27,6 @@ impl<K: Copy + PartialOrd, V> Node<K, V> {
             key: Arc::new(key),
             value: AtomicPtr::new(Box::into_raw(Box::new(value))),
             next_ptr: AtomicPtr::new(next),
-            gc_ptr: AtomicPtr::new(null_mut()),
             state: AtomicI8::new(0),
         }
     }
@@ -87,15 +84,20 @@ impl<K: Copy + PartialOrd, V> Drop for Node<K, V> {
     }
 }
 
-mod test {
+pub mod test {
     use super::Node;
     use std::borrow::{Borrow, BorrowMut};
     use std::cell::RefCell;
     use std::ptr::null_mut;
     use std::rc::Rc;
 
-    struct Item {
+    pub struct Item {
         i: Rc<RefCell<i32>>,
+    }
+    impl Item {
+        pub fn new(i: Rc<RefCell<i32>>) -> Self {
+            Item { i }
+        }
     }
     impl Drop for Item {
         fn drop(&mut self) {
