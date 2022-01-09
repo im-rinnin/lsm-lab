@@ -59,10 +59,6 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         }
     }
 
-    pub fn remove(&self) {
-        unimplemented!()
-    }
-
     pub fn len(&self) -> isize {
         let read = self.lock.read().unwrap();
         let mut res = 0;
@@ -151,23 +147,14 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         // todo check if need gc fetch gc lock ,do gc
     }
 
-    // fn try_insert(&self,node_before:AtomicPtr<Node<K,V>>,new_node:&mut Node<K,V>)->bool{
-    //     unimplemented!()
-    // }
-
-    // pub fn overwrite(&self, value:node: &Node<K, V>) {
-
-    // 3. create new node, set next point
-    // 4. cas pre node point until success, if fail return to 2
-    // 5. check if need gc
-    // }
-    pub fn delete(&self, key: i32) {
+    pub fn delete(&self, key: K) {
         // lock
+        let read_lock = self.lock.read().unwrap();
         // 1. find ,return if fail
-        // 2. set delete state
-        // 3. cas previous node ptr to next ,return if success
-        //  4. if fail ,to step 1,start in previous node,find the new previos node
-        unimplemented!()
+        let node = self.get_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
+        if let Some((n, b)) = node {
+            n.set_deleted();
+        }
     }
 
     pub fn to_iter(&self) -> ListIterator<K, V> {
@@ -226,7 +213,7 @@ impl<K: Copy + PartialOrd + Display, V: Clone + Display> List<K, V> {
         let read_lock = self.lock.read().unwrap();
         let res = self.get_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
         if let Some(n) = res {
-            if n.0.get_key() == key {
+            if !n.0.is_deleted() && n.0.get_key() == key {
                 return Some(n.0.get_value());
             }
         }
@@ -247,9 +234,12 @@ impl<K: Copy + PartialOrd + Display, V: Clone + Display> List<K, V> {
 #[cfg(test)]
 mod test {
     use crate::simple_list::list;
+    use std::borrow::BorrowMut;
+    use std::cell::RefCell;
     use std::env::temp_dir;
     use std::sync::atomic::Ordering;
-    use std::sync::Arc;
+    use std::sync::mpsc::{Receiver, Sender};
+    use std::sync::{mpsc, Arc};
     use std::thread::spawn;
     use std::time::Duration;
 
@@ -312,6 +302,28 @@ mod test {
                 assert_eq!(list.get(i).unwrap(), i);
             }
         }
+    }
+    #[test]
+    fn test_simple_remove() {
+        let list = list::List::new();
+        list.add(1, 1);
+        assert_eq!(list.get(1).unwrap(), 1);
+        list.delete(0);
+        assert_eq!(list.get(1).unwrap(), 1);
+        list.delete(1);
+        list.delete(1);
+        assert!(list.get(1).is_none());
+    }
+    #[test]
+    fn test_remove_get_in_two_thread() {
+        let list = Arc::new(list::List::new());
+        list.add(1, 3);
+        let list_clone = list.clone();
+        let j = spawn(move || {
+            list_clone.delete(1);
+        });
+        j.join().unwrap();
+        assert!(list.get(1).is_none());
     }
     #[test]
     fn test_only_gc() {}
