@@ -35,9 +35,12 @@ impl<K: Copy + PartialOrd, V> Node<K, V> {
         *self.key.borrow()
     }
     pub fn set_value(&mut self, value_ptr: *mut V) {
-        let ptr = self.value.load(Ordering::SeqCst);
-        drop(ptr);
-        self.value = AtomicPtr::new(value_ptr);
+        let ptr = self.value.swap(value_ptr, Ordering::SeqCst);
+        unsafe {
+            if !ptr.is_null() {
+                ptr.drop_in_place();
+            }
+        }
     }
 
     pub fn set_next_ptr(&mut self, ptr: *mut Self) {
@@ -86,6 +89,7 @@ impl<K: Copy + PartialOrd, V> Drop for Node<K, V> {
 
 pub mod test {
     use super::Node;
+    use std::borrow::Cow::Borrowed;
     use std::borrow::{Borrow, BorrowMut};
     use std::cell::RefCell;
     use std::ptr::null_mut;
@@ -113,9 +117,12 @@ pub mod test {
         assert_eq!(*(n.borrow() as &RefCell<i32>).borrow_mut(), 0);
         let item = Item { i: n.clone() };
         {
-            let node = Node::new(3, item, null_mut());
+            let mut node = Node::new(3, item, null_mut());
+            let item = Item { i: n.clone() };
+            // overwrite, should trigger old node value gc
+            node.set_value(Box::into_raw(Box::new(item)));
         }
-        assert_eq!(*(n.borrow() as &RefCell<i32>).borrow_mut(), 1);
+        assert_eq!(*(n.borrow() as &RefCell<i32>).borrow_mut(), 2);
 
         // check key value is dropped
     }

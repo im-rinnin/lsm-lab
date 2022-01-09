@@ -94,7 +94,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                 node_ptr = node.get_next();
             }
         }
-        return res;
+        res
     }
 
     pub fn add(&self, key: K, value: V) {
@@ -252,7 +252,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                 }
             }
         }
-        return gc_count;
+        gc_count
     }
 
     // need to check if deleted
@@ -297,7 +297,7 @@ impl<K: Copy + PartialOrd + Display, V: Clone + Display> List<K, V> {
                 return Some(n.0.get_value());
             }
         }
-        return None;
+        None
     }
 
     fn to_str(&self) -> String {
