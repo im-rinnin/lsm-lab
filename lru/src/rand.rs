@@ -1,9 +1,9 @@
 pub mod simple_rand {
     const A: u64 = 16807;
-    const C: u64 = 0;
+    const C: u64 = 11;
     const M: u64 = i32::MAX as u64 - 1;
 
-    struct Rand {
+    pub struct Rand {
         next: u64,
     }
 

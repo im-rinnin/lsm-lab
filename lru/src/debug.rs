@@ -33,15 +33,14 @@ mod debug {
 
         #[test]
         fn test() {
-            let mut a = vec![];
-            a.push(23);
-            a.push(23);
-            a.push(23);
-            let mut m = a.iter();
-            let s = m.next();
-            // let lock = Arc::new(AtomicI8::new(1));
-            //
-            // let mut jv = vec![];
+            use rand::seq::SliceRandom;
+            use rand::thread_rng;
+
+            let mut rng = thread_rng();
+            let mut y = vec![2, 4, 5, 6, 7];
+            println!("Unshuffled: {:?}", y);
+            y.shuffle(&mut rng);
+            println!("Shuffled:   {:?}", y);
             // for i in 1..10 {
             //     let lock_c = lock.clone();
             //     let j = spawn(move || {

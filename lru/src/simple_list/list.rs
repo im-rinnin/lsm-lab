@@ -20,7 +20,7 @@ use std::hash::Hash;
 
 const GC_THRESHOLD: i64 = 100;
 
-struct List<K: Copy + PartialOrd, V> {
+pub struct List<K: Copy + PartialOrd, V> {
     head: AtomicPtr<Node<K, V>>,
     lock: Arc<RwLock<()>>,
     gc_lock: Arc<Mutex<()>>,
@@ -28,7 +28,7 @@ struct List<K: Copy + PartialOrd, V> {
     gc_threshold: i64,
 }
 
-struct ListIterator<'a, K: Copy + PartialOrd, V> {
+pub struct ListIterator<'a, K: Copy + PartialOrd, V> {
     lock: RwLockReadGuard<'a, ()>,
     node: *mut Node<K, V>,
 }
@@ -288,8 +288,8 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         }
     }
 }
-impl<K: Copy + PartialOrd + Display, V: Clone + Display> List<K, V> {
-    fn get(&self, key: K) -> Option<V> {
+impl<K: Copy + PartialOrd, V: Clone> List<K, V> {
+    pub fn get(&self, key: K) -> Option<V> {
         let read_lock = self.lock.read().unwrap();
         let res = self.get_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
         if let Some(n) = res {
@@ -299,7 +299,9 @@ impl<K: Copy + PartialOrd + Display, V: Clone + Display> List<K, V> {
         }
         None
     }
+}
 
+impl<K: Copy + PartialOrd + Display, V: Clone + Display> List<K, V> {
     fn to_str(&self) -> String {
         let iter = self.to_iter();
         let mut res = String::new();

@@ -68,7 +68,12 @@ mod tests {
 fn main() {
     let mut a = 3;
     loop {
-        let a = (a * 171 + 13) % 11;
+        a = (a * 171 + 13) % 11;
+        if a % 3 == 0 {
+            a -= 7;
+        } else {
+            a *= 3;
+        }
     }
     println!("Hello, world!");
 }

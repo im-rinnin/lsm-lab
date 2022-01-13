@@ -1,4 +1,4 @@
 mod list;
 mod node;
 
-mod bench;
+pub mod bench;
