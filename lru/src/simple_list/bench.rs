@@ -23,9 +23,7 @@ use std::thread::spawn;
 // key,value 大小需要固定，禁止使用string，string会导致内存分配
 // 使用一个函数将当前写入数据分割成若干个交替区间，不同的操作（读，override，remove）使用不同的区间，从而保证互相之间不会影响
 struct Config {
-    init_size: i32,
     work_load_size: i32,
-    date_size: i32,
     read_ratio: i32,
     write_ratio: i32,
     remove_ratio: i32,
@@ -63,19 +61,23 @@ fn build_key(key: i64) -> Key {
 fn build_value(key: i32) -> Value {
     Value { i: key }
 }
-pub fn bench_test() {
-    let list: Arc<List<Key, Value>> = Arc::new(List::new());
-    let thread_number = 5;
-    let key_space_size = 10000;
-
-    // rand key space
+pub fn bench_with_default() {
+    bench_test_all(4, 10000)
+}
+pub fn bench_write() {
+    fill_data(10000);
+}
+// fill data
+// loop rand operation
+pub fn bench_test_all(thread_number: i32, key_space_size: i32) {
     let mut rand_keys = vec![];
     for i in 0..key_space_size {
         rand_keys.push(i as i32);
-        list.add(build_key(i), build_value(i as i32));
     }
     let mut rng = thread_rng();
     rand_keys.shuffle(&mut rng);
+
+    let list = fill_data(key_space_size);
 
     //     set up thread
     let mut joins = vec![];
@@ -91,10 +93,20 @@ pub fn bench_test() {
     }
 }
 
+fn fill_data(key_space_size: i32) -> Arc<List<Key, Value>> {
+    // rand key space
+    let list: Arc<List<Key, Value>> = Arc::new(List::new());
+    for i in (0..key_space_size).rev() {
+        list.add(build_key(i as i64), build_value(i as i32));
+    }
+    list
+}
+
 use crate::rand::simple_rand::Rand;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::fs::read_to_string;
+use std::time::Duration;
 
 struct Worker {
     list: Arc<List<Key, Value>>,
@@ -218,12 +230,16 @@ impl Worker {
 
 #[cfg(test)]
 mod test {
-    use crate::simple_list::bench::{bench_test, Key};
-    #[test]
-    fn test_bench() {
-        bench_test();
-    }
-
+    use crate::simple_list::bench::{bench_test_all, bench_with_default, Key};
+    // #[test]
+    // fn test_bench() {
+    //     bench_test_all(2, 1000);
+    // }
+    //
+    // #[test]
+    // fn test_bench_write() {
+    //     bench_test_all(2, 1000);
+    // }
     #[test]
     fn test() {
         let a = Key { i: 2, miss: 3 };
