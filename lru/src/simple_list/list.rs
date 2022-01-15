@@ -35,6 +35,20 @@ pub struct ListIterator<'a, K: Copy + PartialOrd, V> {
     node: *mut Node<K, V>,
 }
 
+pub struct ListSearchResult<K: Copy + PartialOrd, V> {
+    last_node_less_or_equal: *mut Node<K, V>,
+    next_node: *mut Node<K, V>,
+}
+
+impl<K: Copy + PartialOrd, V> ListSearchResult<K, V> {
+    pub fn new(last_node_less_or_equal: *mut Node<K, V>, next_node: *mut Node<K, V>) -> Self {
+        ListSearchResult {
+            last_node_less_or_equal,
+            next_node,
+        }
+    }
+}
+
 impl<'a, K: Copy + PartialOrd, V> ListIterator<'a, K, V> {
     pub fn new(list: &'a List<K, V>) -> Self {
         let rd_lock = list.lock.read().unwrap();
@@ -101,7 +115,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         res
     }
 
-    pub fn add(&self, key: K, value: V) -> Option<*const Node<K, V>> {
+    pub fn add(&self, key: K, value: V) -> Option<*mut Node<K, V>> {
         // lock
         let read_lock = self.lock.read().unwrap();
 
@@ -116,16 +130,24 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
             let found_res = self.get_last_node_eq_or_less(key, start_node);
             match found_res {
                 // key match, overwrite value
-                Some((n, current_next)) => {
+                Some(ListSearchResult {
+                    last_node_less_or_equal,
+                    next_node,
+                }) => {
                     // set next loop start_node to current found node
-                    start_node = n;
-                    assert!(n.get_key() <= key);
+                    let node;
+                    unsafe {
+                        node = last_node_less_or_equal.as_mut().unwrap();
+                    }
+                    start_node = last_node_less_or_equal;
+                    assert!(node.get_key() <= key);
 
                     // overwrite
-                    if !n.is_deleted() && n.get_key().eq(&key) {
+                    if !node.is_deleted() && node.get_key().eq(&key) {
                         unsafe {
                             // clean value ptr
                             new_node_ptr.as_mut().unwrap().set_value(null_mut());
+                            let n = node;
                             n.set_value(value_ptr);
                             // drop node
                             new_node_ptr.drop_in_place();
@@ -134,12 +156,12 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                     } else {
                         // try insert
                         // if n is not delete n.key < key
-                        assert!((!n.is_deleted() && n.get_key() < key) || n.is_deleted());
+                        assert!((!node.is_deleted() && node.get_key() < key) || node.is_deleted());
                         unsafe {
-                            new_node_ptr.as_mut().unwrap().set_next_ptr(current_next);
+                            new_node_ptr.as_mut().unwrap().set_next_ptr(next_node);
                         }
                         // try cas
-                        let cas_res = n.cas_next_ptr(current_next, new_node_ptr);
+                        let cas_res = node.cas_next_ptr(next_node, new_node_ptr);
                         if cas_res {
                             return Some(new_node_ptr);
                         }
@@ -174,8 +196,15 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         let read_lock = self.lock.read().unwrap();
         // 1. find ,return if fail
         let node = self.get_last_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
-        if let Some((n, b)) = node {
-            n.set_deleted();
+        if let Some(ListSearchResult {
+            last_node_less_or_equal,
+            next_node,
+        }) = node
+        {
+            unsafe {
+                let last_node_less_or_equal = last_node_less_or_equal.as_mut().unwrap();
+                last_node_less_or_equal.set_deleted();
+            }
             let count = self.deleted_counter.fetch_add(1, Ordering::SeqCst);
             // need drop lock first, gc need write lock
             drop(read_lock);
@@ -197,6 +226,10 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
 
     pub fn to_iter(&self) -> ListIterator<K, V> {
         ListIterator::new(self)
+    }
+
+    pub fn head(&self) -> *mut Node<K, V> {
+        self.head.load(Ordering::SeqCst)
     }
 
     // --------------------------private-----------------
@@ -260,11 +293,13 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
     }
 
     // need to check if deleted
-    fn get_last_node_eq_or_less(
+    pub fn get_last_node_eq_or_less(
         &self,
         key: K,
         start_node: *mut Node<K, V>,
-    ) -> Option<(&mut Node<K, V>, *mut Node<K, V>)> {
+    ) -> Option<ListSearchResult<K, V>>
+// Option<(*mut Node<K, V>, *mut Node<K, V>)>
+    {
         let mut node_ptr = start_node;
         if node_ptr.is_null() {
             return None;
@@ -278,13 +313,14 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
             let mut last_node_ptr = node_ptr;
 
             loop {
-                let res = Some((last_node_ptr.as_mut().unwrap(), node_ptr));
+                let res = ListSearchResult::new(last_node_ptr, node_ptr);
+                // let res = Some((last_node_ptr.as_mut().unwrap(), node_ptr));
                 if node_ptr.is_null() {
-                    return res;
+                    return Some(res);
                 }
                 let node_key = node_ptr.as_ref().unwrap().get_key();
                 if node_key > key {
-                    return res;
+                    return Some(res);
                 }
                 last_node_ptr = node_ptr;
                 node_ptr = node_ptr.as_ref().unwrap().get_next();
@@ -296,9 +332,17 @@ impl<K: Copy + PartialOrd, V: Clone> List<K, V> {
     pub fn get(&self, key: K) -> Option<V> {
         let read_lock = self.lock.read().unwrap();
         let res = self.get_last_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
-        if let Some(n) = res {
-            if !n.0.is_deleted() && n.0.get_key() == key {
-                return Some(n.0.get_value());
+        if let Some(ListSearchResult {
+            last_node_less_or_equal,
+            next_node,
+        }) = res
+        {
+            unsafe {
+                let last_node_less_or_equal = last_node_less_or_equal.as_ref().unwrap();
+                if !last_node_less_or_equal.is_deleted() && last_node_less_or_equal.get_key() == key
+                {
+                    return Some(last_node_less_or_equal.get_value());
+                }
             }
         }
         None
@@ -486,5 +530,26 @@ mod test {
         list.add(2, 4);
         assert_eq!(list.get(2).unwrap(), 4);
         assert_eq!("(1:2:false)(2:2:true)(2:3:true)(2:4:false)", list.to_str());
+    }
+
+    use super::ListSearchResult;
+    #[test]
+    fn test_search_from_node() {
+        let list = list::List::new();
+        list.add(1, 1);
+        let n = list.add(2, 2);
+        list.add(3, 3);
+        list.add(6, 6);
+        list.add(5, 5);
+        let res = list.get_last_node_eq_or_less(4, n.unwrap());
+        unsafe {
+            let ListSearchResult {
+                last_node_less_or_equal,
+                next_node,
+            } = res.unwrap();
+            assert_eq!(last_node_less_or_equal.as_ref().unwrap().get_key(), 3);
+            let k = next_node.as_ref().unwrap();
+            assert_eq!(k.get_key(), 5);
+        }
     }
 }
