@@ -20,6 +20,7 @@ use std::hash::Hash;
 
 const GC_THRESHOLD: i64 = 100;
 
+// Thread safe list
 pub struct List<K: Copy + PartialOrd, V> {
     head: AtomicPtr<Node<K, V>>,
     lock: Arc<RwLock<()>>,
@@ -97,7 +98,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         res
     }
 
-    pub fn add(&self, key: K, value: V) {
+    pub fn add(&self, key: K, value: V) -> Option<*const Node<K, V>> {
         // lock
         let read_lock = self.lock.read().unwrap();
 
@@ -126,7 +127,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                             // drop node
                             new_node_ptr.drop_in_place();
                         }
-                        break;
+                        return None;
                     } else {
                         // try insert
                         // if n is not delete n.key < key
@@ -137,7 +138,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                         // try cas
                         let cas_res = n.cas_next_ptr(current_next, new_node_ptr);
                         if cas_res {
-                            return;
+                            return Some(new_node_ptr);
                         }
                     }
                 }
@@ -156,7 +157,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                     );
 
                     if cas_res.is_ok() {
-                        return;
+                        return Some(new_node_ptr);
                     }
                     //     cas fail ,head is update, set start node to current head
                     start_node = self.head.load(Ordering::SeqCst);
@@ -303,7 +304,7 @@ impl<K: Copy + PartialOrd + Display, V: Clone + Display> List<K, V> {
         let iter = self.to_iter();
         let mut res = String::new();
         for i in iter {
-            let s = format!("({}:{})", i.get_key(), i.get_value());
+            let s = format!("({}:{}:{})", i.get_key(), i.get_value(), i.is_deleted());
             res.push_str(s.as_str());
         }
         res
@@ -341,7 +342,10 @@ mod test {
         list.add(1, 1);
         list.add(5, 5);
         list.add(0, 0);
-        assert_eq!(list.to_str(), "(0:0)(1:1)(3:3)(5:5)");
+        assert_eq!(
+            list.to_str(),
+            "(0:0:false)(1:1:false)(3:3:false)(5:5:false)"
+        );
     }
     #[test]
     fn test_10_times() {
@@ -475,5 +479,6 @@ mod test {
         list.delete(2);
         list.add(2, 4);
         assert_eq!(list.get(2).unwrap(), 4);
+        assert_eq!("(1:2:false)(2:2:true)(2:3:true)(2:4:false)", list.to_str());
     }
 }
