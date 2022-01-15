@@ -109,7 +109,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         }
         let mut start_node = self.head.load(Ordering::SeqCst);
         loop {
-            let found_res = self.get_node_eq_or_less(key, start_node);
+            let found_res = self.get_last_node_eq_or_less(key, start_node);
             match found_res {
                 // key match, overwrite value
                 Some((n, current_next)) => {
@@ -117,12 +117,8 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                     start_node = n;
                     assert!(n.get_key() <= key);
 
-                    if n.is_deleted() {
-                        return;
-                    }
-
                     // overwrite
-                    if n.get_key().eq(&key) {
+                    if !n.is_deleted() && n.get_key().eq(&key) {
                         unsafe {
                             // clean value ptr
                             new_node_ptr.as_mut().unwrap().set_value(null_mut());
@@ -133,7 +129,8 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                         break;
                     } else {
                         // try insert
-                        assert!(n.get_key() < key);
+                        // if n is not delete n.key < key
+                        assert!((!n.is_deleted() && n.get_key() < key) || n.is_deleted());
                         unsafe {
                             new_node_ptr.as_mut().unwrap().set_next_ptr(current_next);
                         }
@@ -172,7 +169,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         // lock
         let read_lock = self.lock.read().unwrap();
         // 1. find ,return if fail
-        let node = self.get_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
+        let node = self.get_last_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
         if let Some((n, b)) = node {
             n.set_deleted();
             let count = self.deleted_counter.fetch_add(1, Ordering::SeqCst);
@@ -256,7 +253,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
     }
 
     // need to check if deleted
-    fn get_node_eq_or_less(
+    fn get_last_node_eq_or_less(
         &self,
         key: K,
         start_node: *mut Node<K, V>,
@@ -291,7 +288,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
 impl<K: Copy + PartialOrd, V: Clone> List<K, V> {
     pub fn get(&self, key: K) -> Option<V> {
         let read_lock = self.lock.read().unwrap();
-        let res = self.get_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
+        let res = self.get_last_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
         if let Some(n) = res {
             if !n.0.is_deleted() && n.0.get_key() == key {
                 return Some(n.0.get_value());
@@ -466,5 +463,17 @@ mod test {
         assert_eq!(list_cloned.deleted_counter.load(Ordering::SeqCst), 3);
 
         //     add count to drop, check node gc is working ,no memory leak
+    }
+    #[test]
+    fn test_remove_and_add() {
+        let list = list::List::new();
+        list.add(1, 2);
+        list.add(2, 2);
+        list.delete(2);
+        list.add(2, 3);
+        assert_eq!(list.get(2).unwrap(), 3);
+        list.delete(2);
+        list.add(2, 4);
+        assert_eq!(list.get(2).unwrap(), 4);
     }
 }
