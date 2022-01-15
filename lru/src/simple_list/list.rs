@@ -27,6 +27,7 @@ pub struct List<K: Copy + PartialOrd, V> {
     gc_lock: Arc<Mutex<()>>,
     deleted_counter: AtomicI64,
     gc_threshold: i64,
+    enable_gc: bool,
 }
 
 pub struct ListIterator<'a, K: Copy + PartialOrd, V> {
@@ -61,13 +62,14 @@ impl<'a, K: 'a + Copy + PartialOrd, V: 'a> Iterator for ListIterator<'a, K, V> {
 
 impl<K: Copy + PartialOrd, V> List<K, V> {
     pub fn with_gc_threshold(threshold: i64) -> List<K, V> {
-        List {
-            head: AtomicPtr::new(null_mut()),
-            lock: Arc::new(RwLock::new(())),
-            gc_lock: Arc::new(Mutex::new(())),
-            deleted_counter: AtomicI64::new(0),
-            gc_threshold: threshold,
-        }
+        let mut res = List::new();
+        res.gc_threshold = threshold;
+        res
+    }
+    pub fn with_no_gc() -> List<K, V> {
+        let mut res = List::new();
+        res.enable_gc = false;
+        res
     }
     pub fn new() -> List<K, V> {
         List {
@@ -76,6 +78,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
             gc_lock: Arc::new(Mutex::new(())),
             deleted_counter: AtomicI64::new(0),
             gc_threshold: GC_THRESHOLD,
+            enable_gc: true,
         }
     }
 
@@ -177,6 +180,9 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
             // need drop lock first, gc need write lock
             drop(read_lock);
             // do gc if need
+            if !self.enable_gc {
+                return;
+            }
             if count > self.gc_threshold {
                 // only one thread can do gc
                 let gc_lock = self.gc_lock.try_lock();
