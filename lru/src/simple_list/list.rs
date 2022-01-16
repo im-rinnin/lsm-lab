@@ -36,8 +36,8 @@ pub struct ListIterator<'a, K: Copy + PartialOrd, V> {
 }
 
 pub struct ListSearchResult<K: Copy + PartialOrd, V> {
-    last_node_less_or_equal: *mut Node<K, V>,
-    next_node: *mut Node<K, V>,
+    pub last_node_less_or_equal: *mut Node<K, V>,
+    pub next_node: *mut Node<K, V>,
 }
 
 impl<K: Copy + PartialOrd, V> ListSearchResult<K, V> {
@@ -96,7 +96,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         }
     }
 
-    pub fn len(&self) -> isize {
+    pub fn len(&self) -> usize {
         let read = self.lock.read().unwrap();
         let mut res = 0;
         let mut node_ptr = self.head.load(Ordering::SeqCst);
@@ -119,9 +119,12 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         // lock
         let read_lock = self.lock.read().unwrap();
 
+        self.cas_insert(key, value)
+    }
+
+    fn cas_insert(&self, key: K, value: V) -> Option<*mut Node<K, V>> {
         let value_ptr = Box::into_raw(Box::new(value));
         let new_node_ptr = Box::into_raw(Box::new(Node::with_key(key)));
-
         unsafe {
             new_node_ptr.as_mut().unwrap().set_value(value_ptr);
         }
@@ -170,6 +173,11 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                 // insert to head if not found
                 None => {
                     let current_head = self.head.load(Ordering::SeqCst);
+                    // start node is diff, need search again
+                    if start_node != current_head {
+                        start_node = self.head.load(Ordering::SeqCst);
+                        continue;
+                    }
                     // set next to head
                     unsafe {
                         new_node_ptr.as_mut().unwrap().set_next_ptr(current_head);
@@ -350,7 +358,7 @@ impl<K: Copy + PartialOrd, V: Clone> List<K, V> {
 }
 
 impl<K: Copy + PartialOrd + Display, V: Clone + Display> List<K, V> {
-    fn to_str(&self) -> String {
+    pub fn to_str(&self) -> String {
         let iter = self.to_iter();
         let mut res = String::new();
         for i in iter {
@@ -398,8 +406,8 @@ mod test {
         );
     }
     #[test]
-    fn test_10_times() {
-        for i in 0..10 {
+    fn test_50_times() {
+        for i in 0..50 {
             test_multiple_write_and_read();
         }
     }
@@ -434,6 +442,9 @@ mod test {
             if i % 2 == 0 {
                 assert_eq!(list.get(i).unwrap(), i * 100);
             } else {
+                if list.get(i).is_none() {
+                    println!("{}", list.to_str())
+                }
                 assert_eq!(list.get(i).unwrap(), i);
             }
         }
