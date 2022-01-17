@@ -119,17 +119,23 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         // lock
         let read_lock = self.lock.read().unwrap();
 
-        self.cas_insert(key, value)
+        let mut start_node = self.head.load(Ordering::SeqCst);
+        self.cas_insert(start_node, key, value)
     }
 
-    fn cas_insert(&self, key: K, value: V) -> Option<*mut Node<K, V>> {
+    fn cas_insert(
+        &self,
+        mut start_node: *mut Node<K, V>,
+        key: K,
+        value: V,
+    ) -> Option<*mut Node<K, V>> {
         let value_ptr = Box::into_raw(Box::new(value));
         let new_node_ptr = Box::into_raw(Box::new(Node::with_key(key)));
         unsafe {
             new_node_ptr.as_mut().unwrap().set_value(value_ptr);
         }
         loop {
-            let found_res = self.get_last_node_eq_or_less(key, start_node);
+            let found_res = List::get_last_node_eq_or_less(key, start_node);
             match found_res {
                 // key match, overwrite value
                 Some(ListSearchResult {
@@ -202,7 +208,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         // lock
         let read_lock = self.lock.read().unwrap();
         // 1. find ,return if fail
-        let node = self.get_last_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
+        let node = List::get_last_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
         if let Some(ListSearchResult {
             last_node_less_or_equal,
             next_node,
@@ -301,7 +307,6 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
 
     // need to check if deleted
     pub fn get_last_node_eq_or_less(
-        &self,
         key: K,
         start_node: *mut Node<K, V>,
     ) -> Option<ListSearchResult<K, V>>
@@ -338,7 +343,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
 impl<K: Copy + PartialOrd, V: Clone> List<K, V> {
     pub fn get(&self, key: K) -> Option<V> {
         let read_lock = self.lock.read().unwrap();
-        let res = self.get_last_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
+        let res = List::get_last_node_eq_or_less(key, self.head.load(Ordering::SeqCst));
         if let Some(ListSearchResult {
             last_node_less_or_equal,
             next_node,
@@ -551,7 +556,7 @@ mod test {
         list.add(3, 3);
         list.add(6, 6);
         list.add(5, 5);
-        let res = list.get_last_node_eq_or_less(4, n.unwrap());
+        let res = List::get_last_node_eq_or_less(4, n.unwrap());
         unsafe {
             let ListSearchResult {
                 last_node_less_or_equal,
