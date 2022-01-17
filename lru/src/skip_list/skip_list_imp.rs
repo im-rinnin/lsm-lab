@@ -180,10 +180,6 @@ impl<K: Copy + PartialOrd, V> SkipList<K, V> {
         self.current_max_level
     }
 
-    // fn base_head(&self) -> List<K, V> {
-    //     unimplemented!()
-    // }
-
     fn level_head(&self, level: usize) -> Option<Node<K, V>> {
         unimplemented!()
     }

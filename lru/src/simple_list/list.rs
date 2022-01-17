@@ -128,7 +128,6 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         unsafe {
             new_node_ptr.as_mut().unwrap().set_value(value_ptr);
         }
-        let mut start_node = self.head.load(Ordering::SeqCst);
         loop {
             let found_res = self.get_last_node_eq_or_less(key, start_node);
             match found_res {
