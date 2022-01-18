@@ -4,47 +4,30 @@
 use crate::rand::simple_rand::Rand;
 use crate::simple_list::list::{List, ListSearchResult};
 use crate::simple_list::node::Node;
-use std::sync::RwLock;
+use crate::skip_list::search_result::NodeSearchResult;
+use std::borrow::Borrow;
+use std::cell::RefCell;
+use std::error::Error;
+use std::sync::{Arc, RwLock};
 
-const MAX_LEVEL: i32 = 32;
+const MAX_LEVEL: usize = 32;
 
+// todo need add arc,skip list need thread safe
 struct SkipList<K: Copy + PartialOrd, V> {
     // levels len is MAX_LEVEL
     // not all level are in use
-    levels: Vec<List<K, Ref<K, V>>>,
-    base: List<K, V>,
+    levels: Vec<Arc<List<K, Ref<K, V>>>>,
+    base: Arc<List<K, V>>,
     // gc need stop all other thread
     // gc thread: fetch write lock
     // other thread: fetch read lock
     lock: RwLock<()>,
-    r: Rand,
+    r: RefCell<Rand>,
+    // todo use atmoic
     current_max_level: usize,
 }
 
-struct NodesOnSearchPath<K: Copy + PartialOrd, V> {
-    result: Vec<ListSearchResult<K, V>>,
-}
-
-impl<K: Copy + PartialOrd, V> NodesOnSearchPath<K, V> {
-    fn new() -> Self {
-        unimplemented!()
-    }
-
-    fn push_index(&mut self, node: *mut Node<K, Ref<K, V>>, next_node: *mut Node<K, Ref<K, V>>) {
-        unimplemented!()
-    }
-
-    fn pop_result(&mut self) -> Option<ListSearchResult<K, V>> {
-        unimplemented!()
-    }
-}
-
-// struct ListSearchResult<K: Copy + PartialOrd, V> {
-//     last_node_less_or_equal: Ref<K, V>,
-//     next_node: Ref<K, V>,
-// }
-
-enum Ref<K: Copy + PartialOrd, V> {
+pub enum Ref<K: Copy + PartialOrd, V> {
     Base(*mut Node<K, V>),
     Level(*mut Node<K, Ref<K, V>>),
 }
@@ -63,116 +46,116 @@ impl<K: Copy + PartialOrd, V> SkipList<K, V> {
         let mut levels = vec![];
         for i in 0..MAX_LEVEL {
             let mut list: List<K, Ref<K, V>> = List::with_no_gc();
-            levels.push(list);
+            levels.push(Arc::new(list));
         }
         SkipList {
             levels,
-            base: List::with_no_gc(),
+            base: Arc::new(List::with_no_gc()),
             lock: RwLock::new(()),
-            r: Rand::new(),
+            r: RefCell::new(Rand::new()),
             current_max_level: 0,
-        };
-        unimplemented!()
+        }
     }
 
-    pub fn add(&self, key: K, value: V) {
+    pub fn add(&mut self, key: K, value: V) {
         // read lock
+        let read_lock = self.lock.read().unwrap();
         // call search
-        // if found key, over write return
-        // cas insert base node until success
-        // get random level
+
+        let search_result = self.search_node(key);
+        search_result.add_value_to_base(value);
+
         // cas insert all index nodes
-        unimplemented!()
+        let level = self.random_level(self.len());
+        // todo add random index
+        search_result.add_index_to_level(level);
     }
     pub fn delete(&self, key: K) {
         // read lock
-        // call search node
-        // if found ,delete it
-        // check if need gc
-        // do gc if needed
+        let read_lock = self.lock.read().unwrap();
 
-        unimplemented!()
+        // call search node
+        let search_result = self.search_node(key);
+        // if found ,delete it
+        if let Some(node) = search_result.get_found_node() {
+            //     todo mark as delete
+        }
+        // unlock for gc
+        drop(read_lock);
+        // check if need gc
+        if self.need_do_gc() {
+            let gc_lock = self.lock.write().unwrap();
+            // do gc if needed
+            self.gc()
+        }
     }
     // search node level by level
     // return last node less or equal key, node next
     // record index node in search path
-    // None if skip list is empty or all nodes key is big than key
-    fn search_node(&self, key: K) -> Option<NodesOnSearchPath<K, V>> {
-        if self.is_empty() {
-            return None;
-        }
-
-        if self.base_head().unwrap().get_key() > key {
-            return None;
-        }
-
-        let mut res: NodesOnSearchPath<K, V> = NodesOnSearchPath::new();
-
-        // get index head node
-        let current_level_list = self.top_level_head();
-        let mut start_node = current_level_list.head();
-        let base_start;
-        // let current_level=self.top_level();
-
-        // loop call list.get_node_less_or_equal
-        unsafe {
-            for current_level in (0..self.top_level()).rev() {
-                let search_option = current_level_list.get_last_node_eq_or_less(key, start_node);
-                match search_option {
-                    Some(ListSearchResult {
-                        last_node_less_or_equal,
-                        next_node,
-                    }) => {
-                        let node_ref;
-                        let next_node_ref;
-                        node_ref = last_node_less_or_equal.as_ref().unwrap();
-                        next_node_ref = next_node.as_ref().unwrap();
-                        // check child
-                        match (node_ref.get_value(), next_node_ref.get_value()) {
-                            // if is index ,save to res ,use child as start node,continue loop,
-                            (Ref::Level(n), Ref::Level(next)) => {
-                                res.push_index(n, next);
-                                start_node = n
-                            }
-                            (Ref::Base(n), Ref::Base(next)) => {
-                                base_start = n;
-                                break;
-                                // if is base, set base start node, break loop
-                                //     todo continue
-                            }
-                            // must same type
-                            _ => {
-                                panic!()
-                            }
-                        }
+    fn search_node(&self, key: K) -> NodeSearchResult<K, V> {
+        let mut search_result = NodeSearchResult::new();
+        // from max level, find first index level whose head is less or equal key
+        let max_level = self.current_max_level;
+        let mut base_start = None;
+        // if only base, to (B)
+        if max_level > 0 {
+            let mut start_level_option = None;
+            for level in (1..max_level + 1).rev() {
+                let list = self.get_index_level(level);
+                unsafe {
+                    if list.len() != 0 && list.head().as_ref().unwrap().get_key() <= key {
+                        start_level_option = Some(level);
+                        break;
                     }
-                    None => {
-                        // if current start node is null, check from lower level start
-                        if start_node.is_null() {
-                            // start_node = self.level_head(current_level)
+                }
+            }
+            if let Some(start_level) = start_level_option {
+                let mut start_node = self.get_index_level(start_level).head();
+                assert!(!start_node.is_null());
+                for level in (1..start_level).rev() {
+                    let list = self.get_index_level(level);
+                    // res won't be none
+                    // (A) call list search_last_node_less_or_equal, use list head as start
+                    let res = List::get_last_node_eq_or_less(key, start_node).unwrap();
+                    search_result.save_index_node(list, res.last_node_less_or_equal, res.next_node);
+                    unsafe {
+                        let child = res.last_node_less_or_equal.as_ref().unwrap().get_value();
+                        match child {
+                            // use child as start node, repeat A
+                            Ref::Level(n) => start_node = n,
+                            // if child is base, break
+                            Ref::Base(n) => {
+                                // current level is level one, will break
+                                assert_eq!(level, 1);
+                                base_start = Some(n);
+                            }
                         }
-                        // check child
-                        // if is index ,continue loop, use currnt node's child as start node
-                        // if is base break
-                        // let t = start_node.get_value();
                     }
                 }
             }
         }
-        unimplemented!()
-        // save to result
-        // break if child is base
-        // search in base
-        // Some(res)
+
+        // (B) search in base ,save found
+        let base_level = self.base_level();
+        // if start is none, use base head
+        let base_start = base_start.map_or(self.base_head_ptr(), |n| n);
+        let res = List::get_last_node_eq_or_less(key, base_start);
+        match res {
+            Some(n) => {
+                search_result.save_base_node(base_level, n.last_node_less_or_equal, n.next_node)
+            }
+            None => search_result.base_node_not_found(),
+        }
+        search_result
     }
-    fn check_gc(&self) -> bool {
+    // check if need gc
+    fn need_do_gc(&self) -> bool {
+        // check remove count
+        // get gc
         unimplemented!()
     }
     fn gc(&self) {}
 
-    fn is_empty(&self) -> bool {
-        unimplemented!()
-    }
     fn top_level_head(&self) -> &List<K, Ref<K, V>> {
         self.levels.get(self.current_max_level).unwrap()
     }
@@ -180,25 +163,68 @@ impl<K: Copy + PartialOrd, V> SkipList<K, V> {
         self.current_max_level
     }
 
-    fn level_head(&self, level: usize) -> Option<Node<K, V>> {
-        unimplemented!()
+    fn len(&self) -> usize {
+        self.base.len()
     }
 
-    fn base_head(&self) -> Option<Node<K, V>> {
-        unimplemented!()
+    fn get_index_level(&self, level: usize) -> Arc<List<K, Ref<K, V>>> {
+        assert!(level <= MAX_LEVEL);
+        self.levels.get(level).unwrap().clone()
     }
+
+    fn base_level(&self) -> Arc<List<K, V>> {
+        self.base.clone()
+    }
+
+    fn base_head_ptr(&self) -> *mut Node<K, V> {
+        self.base.head()
+    }
+
+    fn random_level(&self, len: usize) -> usize {
+        let m = max_level(len);
+        if m == 0 {
+            0
+        } else {
+            self.r.borrow_mut().next() as usize % m
+        }
+    }
+}
+fn max_level(len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let res = fast_math::log2(len as f32) as usize;
+    return if res >= MAX_LEVEL { MAX_LEVEL } else { res };
 }
 
 impl<K: Copy + PartialOrd, V: Clone> SkipList<K, V> {
     pub fn get(&self, key: K) -> Option<V> {
-        // read lock
-        // get current max level
-        // search level by level
-        unimplemented!()
+        let read_lock = self.lock.read().unwrap();
+        let search_result = self.search_node(key);
+        if let Some(node) = search_result.get_found_node() {
+            unsafe { Some(node.as_ref().unwrap().get_value()) }
+        } else {
+            None
+        }
     }
 }
 
 #[cfg(test)]
 mod test {
-    fn test() {}
+    use crate::skip_list::skip_list_imp::{max_level, SkipList, MAX_LEVEL};
+
+    #[test]
+    fn test_max_level() {
+        assert_eq!(max_level(1), 0);
+        assert_eq!(max_level(2), 1);
+        assert_eq!(max_level(3), 1);
+        assert_eq!(max_level(8), 3);
+    }
+    #[test]
+    fn test_random_level() {
+        let l: SkipList<i32, i32> = SkipList::new();
+        assert_eq!(l.random_level(3), 0);
+        assert_eq!(l.random_level(0), 0);
+        assert_eq!(l.random_level(256), 4);
+    }
 }
