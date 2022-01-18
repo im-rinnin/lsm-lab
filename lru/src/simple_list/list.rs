@@ -123,7 +123,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         self.cas_insert(start_node, key, value)
     }
 
-    fn cas_insert(
+    pub fn cas_insert(
         &self,
         mut start_node: *mut Node<K, V>,
         key: K,
