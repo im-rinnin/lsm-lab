@@ -5,6 +5,18 @@
 mod debug {
     use std::fmt::Display;
 
+    #[derive(Copy)]
+    struct B<'a> {
+        a: &'a i32,
+    }
+
+    impl<'a> Clone for B<'a> {
+        fn clone(&self) -> Self {
+            todo!()
+            // B { a: self.a }
+        }
+    }
+
     struct A<T> {
         a: T,
     }
@@ -24,6 +36,7 @@ mod debug {
     #[cfg(test)]
     mod test {
         use super::A;
+        use crate::debug::debug::B;
         use std::borrow::Borrow;
         use std::cell::RefCell;
         use std::ptr::slice_from_raw_parts_mut;
@@ -33,6 +46,10 @@ mod debug {
 
         #[test]
         fn test() {
+            let m = 3;
+            let a = B { a: &m };
+            let c = a;
+            println!("{}", *c.a);
             use rand::seq::SliceRandom;
             use rand::thread_rng;
 

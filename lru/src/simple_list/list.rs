@@ -119,10 +119,15 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         // lock
         let read_lock = self.lock.read().unwrap();
 
-        let mut start_node = self.head.load(Ordering::SeqCst);
+        let start_node = self.head.load(Ordering::SeqCst);
         self.cas_insert(start_node, key, value)
     }
 
+    pub fn cas_insert_from_head(&self, key: K, value: V) -> Option<*mut Node<K, V>> {
+        self.cas_insert(self.head.load(Ordering::SeqCst), key, value)
+    }
+
+    // return none if overwrite
     pub fn cas_insert(
         &self,
         mut start_node: *mut Node<K, V>,

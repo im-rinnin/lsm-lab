@@ -8,9 +8,10 @@ use crate::skip_list::search_result::NodeSearchResult;
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::error::Error;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
-const MAX_LEVEL: usize = 32;
+const MAX_LEVEL: usize = 16;
 
 // todo need add arc,skip list need thread safe
 struct SkipList<K: Copy + PartialOrd, V> {
@@ -23,8 +24,7 @@ struct SkipList<K: Copy + PartialOrd, V> {
     // other thread: fetch read lock
     lock: RwLock<()>,
     r: RefCell<Rand>,
-    // todo use atmoic
-    current_max_level: usize,
+    current_max_level: AtomicUsize,
 }
 
 pub enum Ref<K: Copy + PartialOrd, V> {
@@ -41,11 +41,16 @@ impl<K: Copy + PartialOrd, V> Clone for Ref<K, V> {
     }
 }
 
+impl<K: Copy + PartialOrd, V> Clone for SkipList<K, V> {
+    fn clone(&self) -> Self {
+        todo!()
+    }
+}
 impl<K: Copy + PartialOrd, V> SkipList<K, V> {
     fn new() -> Self {
         let mut levels = vec![];
         for i in 0..MAX_LEVEL {
-            let mut list: List<K, Ref<K, V>> = List::with_no_gc();
+            let list: List<K, Ref<K, V>> = List::with_no_gc();
             levels.push(Arc::new(list));
         }
         SkipList {
@@ -53,7 +58,7 @@ impl<K: Copy + PartialOrd, V> SkipList<K, V> {
             base: Arc::new(List::with_no_gc()),
             lock: RwLock::new(()),
             r: RefCell::new(Rand::new()),
-            current_max_level: 0,
+            current_max_level: AtomicUsize::new(0),
         }
     }
 
@@ -63,12 +68,27 @@ impl<K: Copy + PartialOrd, V> SkipList<K, V> {
         // call search
 
         let search_result = self.search_node(key);
-        search_result.add_value_to_base(value);
+        let add_res = search_result.add_value_to_base(value);
+        // some if insert new node
+        if let Some(n) = add_res {
+            // cas insert all index nodes
+            let level = self.random_level(self.len());
+            if level > 0 {
+                let mut res = search_result.add_index_to_level(level, n);
 
-        // cas insert all index nodes
-        let level = self.random_level(self.len());
-        // todo add random index
-        search_result.add_index_to_level(level);
+                // app to head
+                if level > search_result.get_index_level() {
+                    for l in search_result.get_index_level()..level {
+                        let list: Arc<List<K, Ref<K, V>>> = self.get_index_level(l);
+                        let cas_res = (list.borrow() as &List<K, Ref<K, V>>)
+                            .cas_insert_from_head(key, res)
+                            .unwrap();
+                        res = Ref::Level(cas_res);
+                    }
+                    self.current_max_level.fetch_max(level, Ordering::SeqCst);
+                }
+            }
+        }
     }
     pub fn delete(&self, key: K) {
         // read lock
@@ -77,8 +97,10 @@ impl<K: Copy + PartialOrd, V> SkipList<K, V> {
         // call search node
         let search_result = self.search_node(key);
         // if found ,delete it
-        if let Some(node) = search_result.get_found_node() {
-            //     todo mark as delete
+        if let Some(node) = search_result.get() {
+            unsafe {
+                node.as_mut().unwrap().set_deleted();
+            }
         }
         // unlock for gc
         drop(read_lock);
@@ -93,9 +115,9 @@ impl<K: Copy + PartialOrd, V> SkipList<K, V> {
     // return last node less or equal key, node next
     // record index node in search path
     fn search_node(&self, key: K) -> NodeSearchResult<K, V> {
-        let mut search_result = NodeSearchResult::new();
+        let mut search_result = NodeSearchResult::new(key);
         // from max level, find first index level whose head is less or equal key
-        let max_level = self.current_max_level;
+        let max_level = self.current_max_level();
         let mut base_start = None;
         // if only base, to (B)
         if max_level > 0 {
@@ -144,7 +166,7 @@ impl<K: Copy + PartialOrd, V> SkipList<K, V> {
             Some(n) => {
                 search_result.save_base_node(base_level, n.last_node_less_or_equal, n.next_node)
             }
-            None => search_result.base_node_not_found(),
+            None => {}
         }
         search_result
     }
@@ -155,13 +177,6 @@ impl<K: Copy + PartialOrd, V> SkipList<K, V> {
         unimplemented!()
     }
     fn gc(&self) {}
-
-    fn top_level_head(&self) -> &List<K, Ref<K, V>> {
-        self.levels.get(self.current_max_level).unwrap()
-    }
-    fn top_level(&self) -> usize {
-        self.current_max_level
-    }
 
     fn len(&self) -> usize {
         self.base.len()
@@ -188,6 +203,10 @@ impl<K: Copy + PartialOrd, V> SkipList<K, V> {
             self.r.borrow_mut().next() as usize % m
         }
     }
+
+    fn current_max_level(&self) -> usize {
+        self.current_max_level.load(Ordering::SeqCst)
+    }
 }
 fn max_level(len: usize) -> usize {
     if len == 0 {
@@ -201,7 +220,7 @@ impl<K: Copy + PartialOrd, V: Clone> SkipList<K, V> {
     pub fn get(&self, key: K) -> Option<V> {
         let read_lock = self.lock.read().unwrap();
         let search_result = self.search_node(key);
-        if let Some(node) = search_result.get_found_node() {
+        if let Some(node) = search_result.get() {
             unsafe { Some(node.as_ref().unwrap().get_value()) }
         } else {
             None
@@ -212,6 +231,7 @@ impl<K: Copy + PartialOrd, V: Clone> SkipList<K, V> {
 #[cfg(test)]
 mod test {
     use crate::skip_list::skip_list_imp::{max_level, SkipList, MAX_LEVEL};
+    use std::thread::spawn;
 
     #[test]
     fn test_max_level() {
@@ -219,6 +239,7 @@ mod test {
         assert_eq!(max_level(2), 1);
         assert_eq!(max_level(3), 1);
         assert_eq!(max_level(8), 3);
+        assert_eq!(max_level(165525), 16);
     }
     #[test]
     fn test_random_level() {
@@ -226,5 +247,14 @@ mod test {
         assert_eq!(l.random_level(3), 0);
         assert_eq!(l.random_level(0), 0);
         assert_eq!(l.random_level(256), 4);
+    }
+    #[test]
+    fn test_concurrency() {
+        let l = SkipList::new();
+
+        for i in 1..10 {
+            let mut a = l.clone();
+            spawn(move || a.add(3, 4));
+        }
     }
 }
