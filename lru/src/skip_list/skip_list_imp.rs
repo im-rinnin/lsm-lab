@@ -130,26 +130,18 @@ impl<K: Copy + PartialOrd, V> SkipListImp<K, V> {
             }
         }
     }
-    pub fn delete(&self, key: K) {
+    pub fn remove(&self, key: K) {
         // read lock
         let read_lock = self.lock.read().unwrap();
 
         // call search node
         let search_result = self.search_node(key);
         // if found ,delete it
-        if let Some(node) = search_result.get() {
-            unsafe {
-                node.as_mut().unwrap().set_deleted();
-            }
-        }
+        search_result.delete_value();
         // unlock for gc
         drop(read_lock);
         // check if need gc
-        if self.need_do_gc() {
-            let gc_lock = self.lock.write().unwrap();
-            // do gc if needed
-            self.gc()
-        }
+        self.gc_when_necessary();
     }
     // search node level by level
     // return last node less or equal key, node next
@@ -213,14 +205,7 @@ impl<K: Copy + PartialOrd, V> SkipListImp<K, V> {
         }
         search_result
     }
-    // check if need gc
-    fn need_do_gc(&self) -> bool {
-        // check remove count
-        // get gc
-        unimplemented!()
-    }
-    fn gc(&self) {}
-
+    fn gc_when_necessary(&self) {}
     fn len(&self) -> usize {
         self.base.len()
     }
@@ -324,7 +309,22 @@ mod test {
     #[test]
     #[ignore]
     fn test_remove() {
-        todo!()
+        let sk = SkipListImp::new();
+        for i in 0..16 {
+            sk.add(i * 2, i, 0);
+        }
+        sk.add(21, 21, 3);
+        sk.add(15, 20, 3);
+        sk.add(17, 20, 1);
+        sk.remove(17);
+        assert_eq!(format!("{}", sk), "(15:(ref base 15):false)(21:(ref base 21):false)
+(15:(ref level 15):false)(17:(ref base 17):true)(21:(ref level 21):false)
+(0:0:false)(2:1:false)(4:2:false)(6:3:false)(8:4:false)(10:5:false)(12:6:false)(14:7:false)(15:20:false)(16:8:false)(17:20:true)(18:9:false)(20:10:false)(21:21:false)(22:11:false)(24:12:false)(26:13:false)(28:14:false)(30:15:false)\n");
+
+        sk.remove(21);
+        assert_eq!(format!("{}", sk), "(15:(ref base 15):false)(21:(ref base 21):false)
+(15:(ref level 15):false)(17:(ref base 17):true)(21:(ref level 21):true)
+(0:0:false)(2:1:false)(4:2:false)(6:3:false)(8:4:false)(10:5:false)(12:6:false)(14:7:false)(15:20:false)(16:8:false)(17:20:true)(18:9:false)(20:10:false)(21:21:true)(22:11:false)(24:12:false)(26:13:false)(28:14:false)(30:15:false)\n");
     }
 
     #[test]

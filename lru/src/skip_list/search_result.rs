@@ -41,31 +41,6 @@ impl<K: Copy + PartialOrd + Display, V: Clone + Display> Display for NodeSearchR
         write!(f, "{}", res)
     }
 }
-impl<K: Copy + PartialOrd + Display, V: Clone + Display> NodeSearchResult<K, V> {
-    // pub fn to_str(&self) -> String {
-    //     let mut res = String::new();
-    //     for l in self.index_node.iter().rev() {
-    //         unsafe {
-    //             let n = l.res.last_node_less_or_equal.as_ref().unwrap();
-    //             let node_ref = n.get_value();
-    //             let s = match node_ref {
-    //                 Ref::Level(_) => {
-    //                     format!("(index key {})", n.get_key())
-    //                 }
-    //                 Ref::Base(_) => {
-    //                     format!("(base key {})", n.get_key())
-    //                 }
-    //             };
-    //             res.push_str(s.as_str());
-    //             res.push_str("\n");
-    //         }
-    //     }
-    //
-    //     let s = format!("(key {})", self.key);
-    //     res.push_str(s.as_str());
-    //     res
-    // }
-}
 
 impl<K: Copy + PartialOrd, V> NodeSearchResult<K, V> {
     pub fn new(key: K) -> Self {
@@ -98,6 +73,24 @@ impl<K: Copy + PartialOrd, V> NodeSearchResult<K, V> {
             current_level += 1;
         }
         node_ref
+    }
+
+    pub fn delete_value(&self) {
+        if let Some(node) = self.get() {
+            unsafe {
+                node.as_mut().unwrap().set_deleted();
+            }
+            for level_info in self.index_node.iter().rev() {
+                unsafe {
+                    let index_node = level_info.res.last_node_less_or_equal.as_mut().unwrap();
+                    if index_node.get_key() == self.key {
+                        index_node.set_deleted();
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     pub fn add_value_to_base(&self, value: V) -> Option<*mut Node<K, V>> {
