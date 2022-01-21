@@ -15,7 +15,7 @@ use crate::simple_list::node::test::Item;
 use crate::simple_list::node::Node;
 use std::alloc::handle_alloc_error;
 use std::cell::RefCell;
-use std::fmt::Display;
+use std::fmt::{Display, Formatter, Pointer};
 use std::hash::Hash;
 
 const GC_THRESHOLD: i64 = 100;
@@ -366,15 +366,15 @@ impl<K: Copy + PartialOrd, V: Clone> List<K, V> {
     }
 }
 
-impl<K: Copy + PartialOrd + Display, V: Clone + Display> List<K, V> {
-    pub fn to_str(&self) -> String {
+impl<K: Copy + PartialOrd + Display, V: Clone + Display> Display for List<K, V> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let iter = self.to_iter();
         let mut res = String::new();
         for i in iter {
             let s = format!("({}:{}:{})", i.get_key(), i.get_value(), i.is_deleted());
             res.push_str(s.as_str());
         }
-        res
+        write!(f, "{}", res)
     }
 }
 
@@ -410,7 +410,7 @@ mod test {
         list.add(5, 5);
         list.add(0, 0);
         assert_eq!(
-            list.to_str(),
+            format!("{}", list),
             "(0:0:false)(1:1:false)(3:3:false)(5:5:false)"
         );
     }
@@ -452,7 +452,7 @@ mod test {
                 assert_eq!(list.get(i).unwrap(), i * 100);
             } else {
                 if list.get(i).is_none() {
-                    println!("{}", list.to_str())
+                    println!("{}", list)
                 }
                 assert_eq!(list.get(i).unwrap(), i);
             }
@@ -549,7 +549,10 @@ mod test {
         list.delete(2);
         list.add(2, 4);
         assert_eq!(list.get(2).unwrap(), 4);
-        assert_eq!("(1:2:false)(2:2:true)(2:3:true)(2:4:false)", list.to_str());
+        assert_eq!(
+            format!("{}", list),
+            "(1:2:false)(2:2:true)(2:3:true)(2:4:false)"
+        );
     }
 
     use super::ListSearchResult;
