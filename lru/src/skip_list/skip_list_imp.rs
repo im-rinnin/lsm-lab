@@ -130,18 +130,14 @@ impl<K: Copy + PartialOrd, V> SkipListImp<K, V> {
             }
         }
     }
-    pub fn delete(&self, key: K) {
+    pub fn remove(&self, key: K) {
         // read lock
         let read_lock = self.lock.read().unwrap();
 
         // call search node
         let search_result = self.search_node(key);
         // if found ,delete it
-        if let Some(node) = search_result.get() {
-            unsafe {
-                node.as_mut().unwrap().set_deleted();
-            }
-        }
+        search_result.delete_value();
         // unlock for gc
         drop(read_lock);
         // check if need gc
