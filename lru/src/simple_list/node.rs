@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(unused_imports)]
+
 use std::borrow::Borrow;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicI8, AtomicPtr, Ordering};
@@ -9,7 +10,7 @@ use std::sync::Arc;
 pub struct Node<K: Copy + PartialOrd, V> {
     key: Arc<K>,
     value: AtomicPtr<V>,
-    next_ptr: AtomicPtr<Node<K, V>>,
+    pub next_ptr: AtomicPtr<Node<K, V>>,
     state: AtomicI8,
 }
 

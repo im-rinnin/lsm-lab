@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(unused_imports)]
+
 use core::num::FpCategory::Nan;
 use std::borrow::Borrow;
 use std::borrow::Cow::Borrowed;
@@ -125,6 +126,50 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
 
     pub fn cas_insert_from_head(&self, key: K, value: V) -> Option<*mut Node<K, V>> {
         self.cas_insert(self.head.load(Ordering::SeqCst), key, value)
+    }
+    // not thread safe
+    pub fn clean_deleted_node_with_start(start_node: &mut Node<K, V>) {
+        assert!(!start_node.is_deleted());
+        let mut node = start_node;
+        loop {
+            let next_node_ptr = &mut node.next_ptr;
+            if next_node_ptr.load(Ordering::SeqCst).is_null() {
+                break;
+            }
+            unsafe {
+                let next_node = next_node_ptr.load(Ordering::SeqCst).as_mut().unwrap();
+                if next_node.is_deleted() {
+                    node.next_ptr
+                        .store(next_node.next_ptr.load(Ordering::SeqCst), Ordering::SeqCst);
+                    drop(next_node);
+                } else {
+                    node = next_node;
+                }
+            }
+        }
+    }
+
+    pub fn clean_deleted_node(&mut self) {
+        unsafe {
+            // find first node not deleted
+            let mut node_ptr = self.head.load(Ordering::SeqCst);
+            loop {
+                if node_ptr.is_null() {
+                    return;
+                }
+                let node = node_ptr.as_ref().unwrap();
+                if node.is_deleted() {
+                    drop(node_ptr);
+                    node_ptr = node.next_ptr.load(Ordering::SeqCst);
+                } else {
+                    break;
+                }
+            }
+            //     set head to found
+            self.head.store(node_ptr, Ordering::SeqCst);
+
+            List::clean_deleted_node_with_start(node_ptr.as_mut().unwrap());
+        }
     }
 
     // return none if overwrite
@@ -345,6 +390,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
         }
     }
 }
+
 impl<K: Copy + PartialOrd, V: Clone> List<K, V> {
     pub fn get(&self, key: K) -> Option<V> {
         let read_lock = self.lock.read().unwrap();
@@ -400,8 +446,10 @@ mod test {
         assert_eq!(res, 1);
         assert!(list.get(2).is_none());
     }
+
     #[test]
     fn test_five_write() {}
+
     #[test]
     fn test_order() {
         let list = list::List::new();
@@ -414,6 +462,7 @@ mod test {
             "(0:0:false)(1:1:false)(3:3:false)(5:5:false)"
         );
     }
+
     #[test]
     fn test_50_times() {
         for i in 0..50 {
@@ -458,6 +507,7 @@ mod test {
             }
         }
     }
+
     #[test]
     fn test_simple_remove() {
         let list = list::List::new();
@@ -470,6 +520,7 @@ mod test {
         assert!(list.get(1).is_none());
         assert_eq!(list.len(), 0);
     }
+
     #[test]
     fn test_remove_get_in_two_thread() {
         let list = Arc::new(list::List::new());
@@ -481,6 +532,7 @@ mod test {
         j.join().unwrap();
         assert!(list.get(1).is_none());
     }
+
     #[test]
     fn test_list_gc_all_node_is_deleted() {
         let list: List<i32, i32> = list::List::new();
@@ -492,11 +544,13 @@ mod test {
         list.delete(2);
         assert_eq!(list.len(), 0);
     }
+
     #[test]
     fn test_empty_list_gc() {
         let list: List<i32, i32> = list::List::new();
         assert_eq!(list.gc(), 0);
     }
+
     #[test]
     fn test_only_gc() {
         let count = Rc::new(RefCell::new(0));
@@ -513,8 +567,10 @@ mod test {
         assert_eq!(list.gc(), 3);
         assert_eq!(*(count.borrow() as &RefCell<i32>).borrow_mut(), 3);
     }
+
     #[test]
     fn test_all() {}
+
     #[test]
     fn test_gc_with_gc_checker() {
         let list = list::List::with_gc_threshold(3);
@@ -538,6 +594,7 @@ mod test {
 
         //     add count to drop, check node gc is working ,no memory leak
     }
+
     #[test]
     fn test_remove_and_add() {
         let list = list::List::new();
@@ -554,8 +611,61 @@ mod test {
             "(1:2:false)(2:2:true)(2:3:true)(2:4:false)"
         );
     }
+    #[test]
+    fn test_clean_delete_node() {
+        let mut l = List::new();
+        for i in 0..10 {
+            l.add(i, i);
+        }
+
+        l.delete(3);
+        l.delete(0);
+        l.delete(9);
+        l.delete(5);
+
+        l.clean_deleted_node();
+        //     asset
+    }
+
+    #[test]
+    fn test_clean_delete_node() {
+        let mut l = List::new();
+
+        // delete empty list
+        l.delete(0);
+        l.clean_deleted_node();
+        assert_eq!(format!("{}", l), "");
+
+        l.delete(3);
+        for i in 0..10 {
+            l.add(i, i);
+        }
+
+        assert_eq!(format!("{}", l), "(0:0:false)(1:1:false)(2:2:false)(3:3:false)(4:4:false)(5:5:false)(6:6:false)(7:7:false)(8:8:false)(9:9:false)");
+
+        l.delete(3);
+        l.delete(0);
+        l.delete(9);
+        l.delete(5);
+
+        l.clean_deleted_node();
+        assert_eq!(
+            format!("{}", l),
+            "(1:1:false)(2:2:false)(4:4:false)(6:6:false)(7:7:false)(8:8:false)"
+        );
+        assert_eq!(l.len(), 6);
+
+        // no node is deleted
+        l.clean_deleted_node();
+        assert_eq!(
+            format!("{}", l),
+            "(1:1:false)(2:2:false)(4:4:false)(6:6:false)(7:7:false)(8:8:false)"
+        );
+        assert_eq!(l.len(), 6);
+    }
 
     use super::ListSearchResult;
+
     #[test]
     fn test_search_from_node() {
         let list = list::List::new();
