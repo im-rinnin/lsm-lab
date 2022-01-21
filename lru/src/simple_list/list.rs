@@ -611,21 +611,6 @@ mod test {
             "(1:2:false)(2:2:true)(2:3:true)(2:4:false)"
         );
     }
-    #[test]
-    fn test_clean_delete_node() {
-        let mut l = List::new();
-        for i in 0..10 {
-            l.add(i, i);
-        }
-
-        l.delete(3);
-        l.delete(0);
-        l.delete(9);
-        l.delete(5);
-
-        l.clean_deleted_node();
-        //     asset
-    }
 
     #[test]
     fn test_clean_delete_node() {
