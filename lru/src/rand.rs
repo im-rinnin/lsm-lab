@@ -28,9 +28,9 @@ pub mod simple_rand {
         #[test]
         fn test() {
             let mut r = super::Rand::new();
-            assert_eq!(r.next(), 705894);
-            assert_eq!(r.next(), 1126542228);
-            assert_eq!(r.next(), 1579402860);
+            assert_eq!(r.next(), 705905);
+            assert_eq!(r.next(), 1126727116);
+            assert_eq!(r.next(), 391848195);
         }
     }
 }
