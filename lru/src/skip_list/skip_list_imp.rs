@@ -16,6 +16,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
 const MAX_LEVEL: usize = 16;
+// todo wrap skipimp
+// struct SkipList<K: Copy + PartialOrd, V> {}
 
 // todo need add arc,skip list need thread safe
 struct SkipListImp<K: Copy + PartialOrd, V> {
@@ -310,12 +312,16 @@ mod test {
     #[ignore]
     fn test_remove() {
         let sk = SkipListImp::new();
+        sk.remove(1);
+        assert_eq!(sk.len(), 0);
+
         for i in 0..16 {
             sk.add(i * 2, i, 0);
         }
         sk.add(21, 21, 3);
         sk.add(15, 20, 3);
         sk.add(17, 20, 1);
+
         sk.remove(17);
         assert_eq!(format!("{}", sk), "(15:(ref base 15):false)(21:(ref base 21):false)
 (15:(ref level 15):false)(17:(ref base 17):true)(21:(ref level 21):false)
@@ -325,6 +331,18 @@ mod test {
         assert_eq!(format!("{}", sk), "(15:(ref base 15):false)(21:(ref base 21):false)
 (15:(ref level 15):false)(17:(ref base 17):true)(21:(ref level 21):true)
 (0:0:false)(2:1:false)(4:2:false)(6:3:false)(8:4:false)(10:5:false)(12:6:false)(14:7:false)(15:20:false)(16:8:false)(17:20:true)(18:9:false)(20:10:false)(21:21:true)(22:11:false)(24:12:false)(26:13:false)(28:14:false)(30:15:false)\n");
+
+        // delete index
+        sk.remove(15);
+        assert!(sk.get(15).is_none());
+
+        sk.remove(6);
+        assert!(sk.get(6).is_none());
+
+        sk.remove(28);
+        assert!(sk.get(28).is_none());
+
+        assert_eq!(sk.len(), 16);
     }
 
     #[test]
