@@ -3,7 +3,7 @@ use crate::simple_list::list::ListSearchResult;
 use crate::simple_list::node::Node;
 use crate::skip_list::skip_list_imp::Ref;
 use std::borrow::Borrow;
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 struct LevelInfo<K: Copy + PartialOrd, V> {
@@ -19,8 +19,8 @@ pub struct NodeSearchResult<K: Copy + PartialOrd, V> {
     key: K,
 }
 
-impl<K: Copy + PartialOrd + Display, V: Clone + Display> NodeSearchResult<K, V> {
-    pub fn to_str(&self) -> String {
+impl<K: Copy + PartialOrd + Display, V: Clone + Display> Display for NodeSearchResult<K, V> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut res = String::new();
         for l in self.index_node.iter().rev() {
             unsafe {
@@ -38,11 +38,33 @@ impl<K: Copy + PartialOrd + Display, V: Clone + Display> NodeSearchResult<K, V> 
                 res.push_str("\n");
             }
         }
-
-        let s = format!("(key {})", self.key);
-        res.push_str(s.as_str());
-        res
+        write!(f, "{}", res)
     }
+}
+impl<K: Copy + PartialOrd + Display, V: Clone + Display> NodeSearchResult<K, V> {
+    // pub fn to_str(&self) -> String {
+    //     let mut res = String::new();
+    //     for l in self.index_node.iter().rev() {
+    //         unsafe {
+    //             let n = l.res.last_node_less_or_equal.as_ref().unwrap();
+    //             let node_ref = n.get_value();
+    //             let s = match node_ref {
+    //                 Ref::Level(_) => {
+    //                     format!("(index key {})", n.get_key())
+    //                 }
+    //                 Ref::Base(_) => {
+    //                     format!("(base key {})", n.get_key())
+    //                 }
+    //             };
+    //             res.push_str(s.as_str());
+    //             res.push_str("\n");
+    //         }
+    //     }
+    //
+    //     let s = format!("(key {})", self.key);
+    //     res.push_str(s.as_str());
+    //     res
+    // }
 }
 
 impl<K: Copy + PartialOrd, V> NodeSearchResult<K, V> {
@@ -58,7 +80,7 @@ impl<K: Copy + PartialOrd, V> NodeSearchResult<K, V> {
     pub fn add_index_to_level(&self, level: usize, base_node: *mut Node<K, V>) -> Ref<K, V> {
         let mut node_ref = Ref::Base(base_node);
         let mut current_level = 1;
-        for level_info in &self.index_node {
+        for level_info in self.index_node.iter().rev() {
             match level_info {
                 LevelInfo { list, res } => {
                     let res = (list.borrow() as &List<K, Ref<K, V>>).cas_insert(

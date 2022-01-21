@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![allow(unused_imports)]
+
 use crate::rand::simple_rand::Rand;
 use crate::simple_list::list::{List, ListSearchResult};
 use crate::simple_list::node::Node;
@@ -8,6 +9,7 @@ use crate::skip_list::search_result::NodeSearchResult;
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::error::Error;
+use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -33,18 +35,18 @@ pub enum Ref<K: Copy + PartialOrd, V> {
     Level(*mut Node<K, Ref<K, V>>),
 }
 
-impl<K: Copy + PartialOrd + Display, V: Clone + Display> SkipListImp<K, V> {
-    pub fn to_str(&self) -> String {
+impl<K: Copy + PartialOrd + Display, V: Clone + Display> Display for SkipListImp<K, V> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let mut res = String::new();
-        for i in (1..self.current_max_level.load(Ordering::SeqCst)).rev() {
-            let str = self.levels.get(i).unwrap().to_str();
+        for i in 1..self.current_max_level.load(Ordering::SeqCst) {
+            let str = format!("{}", self.levels.get(i).unwrap());
             res = res.add(str.as_str());
             res.push_str("\n");
         }
-        let str = (self.base.borrow() as &List<K, V>).to_str();
+        let str = format!("{}", (self.base.borrow() as &List<K, V>));
         res = res.add(str.as_str());
         res.push_str("\n");
-        res
+        write!(f, "{}", res)
     }
 }
 
@@ -72,11 +74,6 @@ impl<K: Copy + PartialOrd, V> Clone for Ref<K, V> {
     }
 }
 
-impl<K: Copy + PartialOrd, V> Clone for SkipListImp<K, V> {
-    fn clone(&self) -> Self {
-        todo!()
-    }
-}
 impl<K: Copy + PartialOrd, V> SkipListImp<K, V> {
     fn new() -> Self {
         let array = [
@@ -168,6 +165,7 @@ impl<K: Copy + PartialOrd, V> SkipListImp<K, V> {
             for level in (1..max_level + 1).rev() {
                 let list = self.get_index_level(level);
                 unsafe {
+                    let a = list.head().as_ref().unwrap().get_key();
                     if list.len() != 0 && list.head().as_ref().unwrap().get_key() <= key {
                         start_level_option = Some(level);
                         break;
@@ -253,6 +251,7 @@ impl<K: Copy + PartialOrd, V> SkipListImp<K, V> {
         self.current_max_level.load(Ordering::SeqCst)
     }
 }
+
 fn max_level(len: usize) -> usize {
     if len == 0 {
         return 0;
@@ -291,6 +290,7 @@ mod test {
         assert_eq!(max_level(8), 3);
         assert_eq!(max_level(165525), 16);
     }
+
     #[test]
     fn test_random_level() {
         let l: SkipListImp<i32, i32> = SkipListImp::new();
@@ -298,12 +298,35 @@ mod test {
         assert_eq!(l.random_level(0, 100), 0);
         assert_eq!(l.random_level(256, 100), 4);
     }
+
     #[test]
     fn test_get_empty() {
         let sk: SkipListImp<i32, i32> = SkipListImp::new();
         assert_eq!(sk.len(), 0);
         assert!(sk.get(3).is_none());
     }
+
+    #[test]
+    #[ignore]
+    fn test_thread_bench() {}
+    #[test]
+    #[ignore]
+    fn test_single_bench() {}
+    #[test]
+    #[ignore]
+    fn test_multiple_thread_read_write_remove() {}
+    #[test]
+    #[ignore]
+    fn test_gc() {
+        todo!()
+    }
+
+    #[test]
+    #[ignore]
+    fn test_remove() {
+        todo!()
+    }
+
     #[test]
     fn test_level() {
         let sk = SkipListImp::new();
@@ -313,10 +336,11 @@ mod test {
         sk.add(21, 21, 3);
         sk.add(17, 20, 1);
         sk.add(15, 20, 3);
-        println!("{}", sk.to_str());
+        println!("{}", sk);
         let res = sk.get_with_debug(18);
-        println!("{}", res.1.to_str());
+        println!("{}", res.1);
     }
+
     #[test]
     fn test_one_level_add_get() {
         let sk = SkipListImp::new();
@@ -331,6 +355,7 @@ mod test {
         let res = sk.get(2).unwrap();
         assert_eq!(res, 3);
     }
+
     #[test]
     fn test_concurrency() {
         let sk = Arc::new(SkipListImp::new());
