@@ -40,7 +40,7 @@ pub enum Ref<K: Copy + PartialOrd, V> {
 impl<K: Copy + PartialOrd + Display, V: Clone + Display> Display for SkipListImp<K, V> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let mut res = String::new();
-        for i in 1..self.current_max_level.load(Ordering::SeqCst) {
+        for i in (1..self.current_max_level.load(Ordering::SeqCst) + 1).rev() {
             let str = format!("{}", self.levels.get(i).unwrap());
             res = res.add(str.as_str());
             res.push_str("\n");
@@ -169,7 +169,7 @@ impl<K: Copy + PartialOrd, V> SkipListImp<K, V> {
             if let Some(start_level) = start_level_option {
                 let mut start_node = self.get_index_level(start_level).head();
                 assert!(!start_node.is_null());
-                for level in (1..start_level).rev() {
+                for level in (1..start_level + 1).rev() {
                     let list = self.get_index_level(level);
                     // res won't be none
                     // (A) call list search_last_node_less_or_equal, use list head as start
@@ -309,7 +309,6 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn test_remove() {
         let sk = SkipListImp::new();
         sk.remove(1);
@@ -323,13 +322,16 @@ mod test {
         sk.add(17, 20, 1);
 
         sk.remove(17);
-        assert_eq!(format!("{}", sk), "(15:(ref base 15):false)(21:(ref base 21):false)
-(15:(ref level 15):false)(17:(ref base 17):true)(21:(ref level 21):false)
+        assert_eq!(format!("{}", sk), "(15:(ref level 15):false)(21:(ref level 21):false)
+(15:(ref level 15):false)(21:(ref level 21):false)
+(15:(ref base 15):false)(17:(ref base 17):true)(21:(ref base 21):false)
 (0:0:false)(2:1:false)(4:2:false)(6:3:false)(8:4:false)(10:5:false)(12:6:false)(14:7:false)(15:20:false)(16:8:false)(17:20:true)(18:9:false)(20:10:false)(21:21:false)(22:11:false)(24:12:false)(26:13:false)(28:14:false)(30:15:false)\n");
 
         sk.remove(21);
-        assert_eq!(format!("{}", sk), "(15:(ref base 15):false)(21:(ref base 21):false)
-(15:(ref level 15):false)(17:(ref base 17):true)(21:(ref level 21):true)
+        println!("{}", sk);
+        assert_eq!(format!("{}", sk), "(15:(ref level 15):false)(21:(ref level 21):true)
+(15:(ref level 15):false)(21:(ref level 21):true)
+(15:(ref base 15):false)(17:(ref base 17):true)(21:(ref base 21):true)
 (0:0:false)(2:1:false)(4:2:false)(6:3:false)(8:4:false)(10:5:false)(12:6:false)(14:7:false)(15:20:false)(16:8:false)(17:20:true)(18:9:false)(20:10:false)(21:21:true)(22:11:false)(24:12:false)(26:13:false)(28:14:false)(30:15:false)\n");
 
         // delete index
@@ -342,7 +344,7 @@ mod test {
         sk.remove(28);
         assert!(sk.get(28).is_none());
 
-        assert_eq!(sk.len(), 16);
+        assert_eq!(sk.len(), 14);
     }
 
     #[test]
