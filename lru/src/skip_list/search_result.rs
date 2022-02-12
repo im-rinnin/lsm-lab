@@ -35,7 +35,7 @@ impl<K: Copy + PartialOrd + Display, V: Clone + Display> Display for NodeSearchR
                     }
                 };
                 res.push_str(s.as_str());
-                res.push_str("\n");
+                res.push('\n');
             }
         }
         write!(f, "{}", res)
@@ -56,17 +56,14 @@ impl<K: Copy + PartialOrd, V> NodeSearchResult<K, V> {
         let mut node_ref = Ref::Base(base_node);
         let mut current_level = 1;
         for level_info in self.index_node.iter().rev() {
-            match level_info {
-                LevelInfo { list, res } => {
-                    let res = (list.borrow() as &List<K, Ref<K, V>>).cas_insert(
-                        res.last_node_less_or_equal,
-                        self.key,
-                        node_ref,
-                    );
-                    assert!(res.is_some());
-                    node_ref = Ref::Level(res.unwrap());
-                }
-            }
+            let LevelInfo { list, res } = level_info;
+            let res = (list.borrow() as &List<K, Ref<K, V>>).cas_insert(
+                res.last_node_less_or_equal,
+                self.key,
+                node_ref,
+            );
+            assert!(res.is_some());
+            node_ref = Ref::Level(res.unwrap());
             if current_level == level {
                 break;
             }

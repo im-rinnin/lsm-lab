@@ -188,7 +188,7 @@ impl Worker {
         if n < 0 {
             return Op::OverWrite;
         }
-        return Op::Remove;
+        Op::Remove
     }
 
     fn read(&mut self) {

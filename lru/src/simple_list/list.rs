@@ -75,6 +75,11 @@ impl<'a, K: 'a + Copy + PartialOrd, V: 'a> Iterator for ListIterator<'a, K, V> {
     }
 }
 
+impl<K: Copy + PartialOrd, V> Default for List<K, V> {
+    fn default() -> Self {
+        List::new()
+    }
+}
 impl<K: Copy + PartialOrd, V> List<K, V> {
     pub fn with_gc_threshold(threshold: i64) -> List<K, V> {
         let mut res = List::new();
@@ -95,6 +100,10 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
             gc_threshold: GC_THRESHOLD,
             enable_gc: true,
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn len(&self) -> usize {
@@ -141,7 +150,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                 if next_node.is_deleted() {
                     node.next_ptr
                         .store(next_node.next_ptr.load(Ordering::SeqCst), Ordering::SeqCst);
-                    drop(next_node);
+                    // drop(next_node);
                 } else {
                     node = next_node;
                 }
@@ -159,7 +168,7 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                 }
                 let node = node_ptr.as_ref().unwrap();
                 if node.is_deleted() {
-                    drop(node_ptr);
+                    drop(Box::from_raw(node_ptr));
                     node_ptr = node.next_ptr.load(Ordering::SeqCst);
                 } else {
                     break;

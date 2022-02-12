@@ -36,7 +36,7 @@ mod debug_tmp {
     #[cfg(test)]
     mod test {
         use super::A;
-        use crate::debug::debug::B;
+        use crate::debug::debug_tmp::B;
         use std::borrow::Borrow;
         use std::cell::RefCell;
         use std::ptr::slice_from_raw_parts_mut;

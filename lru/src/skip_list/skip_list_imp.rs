@@ -43,11 +43,11 @@ impl<K: Copy + PartialOrd + Display, V: Clone + Display> Display for SkipListImp
         for i in (1..self.current_max_level.load(Ordering::SeqCst) + 1).rev() {
             let str = format!("{}", self.levels.get(i).unwrap());
             res = res.add(str.as_str());
-            res.push_str("\n");
+            res.push('\n');
         }
         let str = format!("{}", (self.base.borrow() as &List<K, V>));
         res = res.add(str.as_str());
-        res.push_str("\n");
+        res.push('\n');
         write!(f, "{}", res)
     }
 }
@@ -70,8 +70,8 @@ impl<K: Copy + PartialOrd + Display, V> Display for Ref<K, V> {
 impl<K: Copy + PartialOrd, V> Clone for Ref<K, V> {
     fn clone(&self) -> Self {
         match self {
-            Ref::Level(n) => Ref::Level(n.clone()),
-            Ref::Base(n) => Ref::Base(n.clone()),
+            Ref::Level(n) => Ref::Level(*n),
+            Ref::Base(n) => Ref::Base(*n),
         }
     }
 }
@@ -244,7 +244,11 @@ fn max_level(len: usize) -> usize {
         return 0;
     }
     let res = fast_math::log2(len as f32) as usize;
-    return if res >= MAX_LEVEL { MAX_LEVEL } else { res };
+    if res >= MAX_LEVEL {
+        MAX_LEVEL
+    } else {
+        res
+    }
 }
 
 impl<K: Copy + PartialOrd, V: Clone> SkipListImp<K, V> {
