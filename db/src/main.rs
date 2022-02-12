@@ -1,5 +1,5 @@
-extern crate lru;
-use lru::simple_list::bench::bench_with_default;
+extern crate db;
+use db::simple_list::bench::bench_with_default;
 use std::borrow::{Borrow, BorrowMut};
 use std::fs::File;
 use std::io::Write;

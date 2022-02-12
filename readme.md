@@ -23,7 +23,7 @@ paper，其他类似项目 todo
 如何测试
 
 ```
-cargo test
+sh test.sh
 ```
 
 如何性能测试 todo

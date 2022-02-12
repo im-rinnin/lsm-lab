@@ -146,11 +146,12 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                 break;
             }
             unsafe {
-                let next_node = next_node_ptr.load(Ordering::SeqCst).as_mut().unwrap();
+                let next_node_ptr_raw = next_node_ptr.load(Ordering::SeqCst);
+                let next_node = next_node_ptr_raw.as_mut().unwrap();
                 if next_node.is_deleted() {
                     node.next_ptr
                         .store(next_node.next_ptr.load(Ordering::SeqCst), Ordering::SeqCst);
-                    // drop(next_node);
+                    next_node_ptr_raw.drop_in_place();
                 } else {
                     node = next_node;
                 }
@@ -350,7 +351,6 @@ impl<K: Copy + PartialOrd, V> List<K, V> {
                     let last_node = last_node_ptr.as_mut().unwrap();
                     last_node.set_next_ptr(current_node.get_next());
                     //     drop current node
-                    // drop(current_node);
                     current_node_ptr.drop_in_place();
                     gc_count += 1;
                     //     set next node

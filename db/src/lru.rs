@@ -55,7 +55,7 @@ impl<K: Hash + Eq + Copy, V> Lru<K, V> {
             let mut get_res = self.map.remove(&key).unwrap();
             get_res.value = value;
 
-            // fix before and after item in lru
+            // fix before and after item in db
             self.remove_from_list(key, &mut get_res);
 
             // set to None
