@@ -2,7 +2,7 @@
 #![allow(unused_variables)]
 #![allow(unused_imports)]
 
-mod debug {
+mod debug_tmp {
     use std::fmt::Display;
 
     #[derive(Copy)]

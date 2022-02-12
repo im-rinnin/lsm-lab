@@ -11,24 +11,3 @@ fn main() {
     println!("start");
     bench_with_default();
 }
-
-// fn main() {
-//     let mut j = None;
-//     let lock = Arc::new(Mutex::new(1));
-//     for i in 0..1 {
-//         let lock_clone = lock.clone();
-//         j = Some(spawn(move || {
-//             let mut a = 3;
-//             loop {
-//                 a += 4;
-//                 // if a > 23432 {
-//                 a /= 2;
-//                 let mut h: &Mutex<i32> = lock_clone.borrow();
-//                 let mut s = h.lock().unwrap();
-//                 (*s) += a;
-//                 // }
-//             }
-//         }));
-//     }
-//     j.unwrap().join();
-// }

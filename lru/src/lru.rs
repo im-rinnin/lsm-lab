@@ -2,7 +2,6 @@
 mod lru {
     use std::collections::HashMap;
 
-
     struct LruItem<K, V> {
         value: V,
         insert_after_key: Option<K>,
@@ -11,7 +10,11 @@ mod lru {
 
     impl<K, V> LruItem<K, V> {
         fn new(value: V) -> LruItem<K, V> {
-            LruItem { value, insert_after_key: Option::None, insert_before_key: Option::None }
+            LruItem {
+                value,
+                insert_after_key: Option::None,
+                insert_before_key: Option::None,
+            }
         }
     }
 
@@ -23,18 +26,22 @@ mod lru {
         capacity: usize,
     }
 
-
-    use std::hash::Hash;
     use std::borrow::Borrow;
+    use std::hash::Hash;
 
     impl<K: Hash + Eq + Copy, V> Lru<K, V> {
         pub fn new(size: usize) -> Lru<K, V> {
             assert!(size > 0);
-            Lru { capacity: size, head_key: Option::None, tail_key: Option::None, map: HashMap::with_capacity(size) }
+            Lru {
+                capacity: size,
+                head_key: Option::None,
+                tail_key: Option::None,
+                map: HashMap::with_capacity(size),
+            }
         }
 
         pub fn get(&self, key: K) -> Option<&V> {
-            let res = self.map.get(&key).map(|i| { i.value.borrow() });
+            let res = self.map.get(&key).map(|i| i.value.borrow());
             res
         }
         pub fn delete(&mut self, key: K) -> Option<V> {
@@ -77,12 +84,17 @@ mod lru {
 
         fn remove_from_list(&mut self, key: K, get_res: &mut LruItem<K, V>) {
             if let Some(insert_before_key) = get_res.insert_before_key {
-                self.map.get_mut(&insert_before_key).unwrap().insert_after_key = get_res.insert_after_key;
+                self.map
+                    .get_mut(&insert_before_key)
+                    .unwrap()
+                    .insert_after_key = get_res.insert_after_key;
             }
             if let Some(insert_after_key) = get_res.insert_after_key {
-                self.map.get_mut(&insert_after_key).unwrap().insert_before_key = get_res.insert_before_key;
+                self.map
+                    .get_mut(&insert_after_key)
+                    .unwrap()
+                    .insert_before_key = get_res.insert_before_key;
             }
-
 
             if self.head_key.is_some() {
                 // both key is some
@@ -104,7 +116,10 @@ mod lru {
                 self.tail_key = Option::Some(key);
                 self.head_key = Option::Some(key);
             } else {
-                self.map.get_mut(&self.tail_key.unwrap()).unwrap().insert_after_key = Option::Some(key);
+                self.map
+                    .get_mut(&self.tail_key.unwrap())
+                    .unwrap()
+                    .insert_after_key = Option::Some(key);
                 self.tail_key = Option::Some(key);
                 item.insert_before_key = self.tail_key;
             }
