@@ -39,7 +39,7 @@ impl<'a> SortedKVIter<'a> {
 }
 
 impl<'a> Iterator for SortedKVIter<'a> {
-    type Item = (&'a (Key, Value));
+    type Item = &'a (Key, Value);
 
 
     fn next(&mut self) -> Option<Self::Item> {

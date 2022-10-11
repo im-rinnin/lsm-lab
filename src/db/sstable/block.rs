@@ -1,0 +1,187 @@
+use std::io::Write;
+
+use anyhow::Result;
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+
+use crate::db::key::Key;
+use crate::db::sstable::SSTableReader;
+use crate::db::value::Value;
+
+pub const BLOCK_SIZE: usize = 4 * 1024 * 1024;
+
+/// entry format
+/// [key size(u16),key data,value size(u16),value data]
+pub struct Block<'a> {
+    content: &'a Vec<u8>,
+}
+
+/// data block,4k default
+/// entry 1
+/// entry 2
+/// ...
+/// entry n
+/// pad
+pub struct BlockBuilder {
+    content: Vec<u8>,
+}
+
+/// [last_key offset, block_size u16,entry_number u16]
+pub struct BlockMeta {
+    last_key: Key,
+    block_offset: u64,
+    size: usize,
+    entry_number: usize,
+}
+
+impl<'a> Block<'a> {
+    const SIZE_LEN: usize = 2;
+    pub fn new(v: &'a Vec<u8>) -> Self {
+        Block { content: v }
+    }
+
+    pub fn find(&self, key: &Key, entry_number: usize) -> Result<Option<Value>> {
+        let mut position = 0;
+        let mut count = 0;
+        while count < entry_number {
+            count += 1;
+            let key_size = (&self.content[position..position + Self::SIZE_LEN]).read_u16::<LittleEndian>()? as usize;
+            position += Self::SIZE_LEN;
+
+            let key_content = &self.content[position..position + key_size];
+            position += key_size;
+            let value_size = (&self.content[position..position + Self::SIZE_LEN]).read_u16::<LittleEndian>()? as usize;
+            position += Self::SIZE_LEN;
+            let value_content = &self.content[position..position + value_size];
+            position += value_size;
+            if key.equal_u8(key_content) {
+                return Ok(Some(Value::from_u8(value_content)));
+            }
+        }
+        Ok(None)
+    }
+}
+
+
+impl BlockMeta {
+    pub fn last_key(&self) -> &Key {
+        &self.last_key
+    }
+    pub fn block_offset(&self) -> u64 {
+        self.block_offset
+    }
+    pub fn entry_size(&self) -> usize {
+        self.entry_number
+    }
+    pub fn size(&self) -> usize {
+        self.size
+    }
+    pub fn new(k: &Key, number: usize, size: usize, block_offset: u64) -> Self {
+        BlockMeta { last_key: k.clone(), entry_number: number, size, block_offset }
+    }
+
+    // [key_size,key_content,entry_number]
+    pub fn write_to_binary(&self, write: &mut dyn Write) -> Result<()> {
+        write.write_u16::<LittleEndian>(self.last_key.len() as u16)?;
+        write.write(self.last_key.data())?;
+        write.write_u16::<LittleEndian>(self.block_offset as u16)?;
+        write.write_u16::<LittleEndian>(self.size as u16)?;
+        write.write_u16::<LittleEndian>(self.entry_number as u16)?;
+        Ok(())
+    }
+
+    pub fn build_block_metas(data: &mut dyn SSTableReader, number: usize) -> Result<Vec<BlockMeta>> {
+        let mut count = 0;
+        let mut result = Vec::new();
+        // let mut position = 0;
+        while count < number {
+            count += 1;
+            let key_size = data.read_u16::<LittleEndian>()? as usize;
+
+            let mut key_data = vec![0; key_size];
+            data.read_exact(&mut key_data)?;
+
+            let last_key = Key::from_u8_vec(key_data);
+            let block_offset = data.read_u16::<LittleEndian>()?;
+            let size = data.read_u16::<LittleEndian>()?;
+            let entry_number = data.read_u16::<LittleEndian>()?;
+
+            result.push(BlockMeta::new(&last_key, entry_number as usize, size as usize, block_offset as u64));
+        }
+        Ok(result)
+    }
+}
+
+
+impl BlockBuilder {
+    const ENTRY_NUMBER_LEN: usize = 2;
+    pub fn new() -> Self {
+        BlockBuilder { content: Vec::new() }
+    }
+
+    pub fn len(&self) -> usize {
+        self.content.len()
+    }
+
+    pub fn append(&mut self, key: &Key, value: &Value) -> Result<()> {
+        self.content.write_u16::<LittleEndian>(key.len() as u16)?;
+        self.content.write(key.data())?;
+
+        self.content.write_u16::<LittleEndian>(value.len() as u16)?;
+        self.content.write(value.data())?;
+        Ok(())
+    }
+
+    pub fn flush(&mut self, w: &mut dyn Write) -> Result<()> {
+        w.write(self.content.as_slice())?;
+        self.content.clear();
+        Ok(())
+    }
+}
+
+
+#[cfg(test)]
+mod test {
+    use std::io::Cursor;
+
+    use crate::db::key::Key;
+    use crate::db::sstable::block::{Block, BlockBuilder, BlockMeta};
+    use crate::db::value::Value;
+
+    #[test]
+    fn test_block_builder_and_read() {
+        let mut b_builder = BlockBuilder::new();
+
+        let mut content: Vec<u8> = Vec::new();
+        let number = 100;
+        for i in 0..number {
+            b_builder.append(&Key::new(&i.to_string()), &Value::new(&i.to_string())).unwrap();
+        }
+        b_builder.flush(&mut content).unwrap();
+        assert_eq!(b_builder.len(), 0);
+
+        let block = Block::new(&content);
+        for i in 0..100 {
+            assert_eq!(block.find(&Key::new(&i.to_string()), number).unwrap().unwrap(), Value::new(&i.to_string()));
+        }
+        assert!(block.find(&Key::new(&(number + 1).to_string()), 100).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_block_meta_builder_and_read() {
+        let mut content = Vec::new();
+        let b1 = BlockMeta::new(&Key::new("a"), 10, 1, 0);
+        let b2 = BlockMeta::new(&Key::new("b"), 5, 2, 100);
+        b1.write_to_binary(&mut content).unwrap();
+        b2.write_to_binary(&mut content).unwrap();
+
+        let block_metas = BlockMeta::build_block_metas(&mut Cursor::new(content), 2).unwrap();
+        assert_eq!(block_metas[0].last_key(), &Key::new("a"));
+        assert_eq!(block_metas[0].entry_size(), 10);
+        assert_eq!(block_metas[0].size(), 1);
+        assert_eq!(block_metas[0].block_offset(), 0);
+        assert_eq!(block_metas[1].last_key(), &Key::new("b"));
+        assert_eq!(block_metas[1].size(), 2);
+        assert_eq!(block_metas[1].block_offset(), 100);
+        assert_eq!(block_metas[1].entry_size(), 5);
+    }
+}
