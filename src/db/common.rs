@@ -67,7 +67,7 @@ mod test {
     use crate::db::value::Value;
 
     #[test]
-    pub fn test_SortedKVIter() {
+    pub fn test_sorted_kviter() {
         let mut a = vec![(Key::new("a"), Value::new("a")), (Key::new("d"), Value::new("a"))];
         let mut b = vec![(Key::new("b"), Value::new("a")), (Key::new("s"), Value::new("a"))];
         let it = &mut a.iter();
