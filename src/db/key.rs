@@ -1,5 +1,5 @@
 
-#[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Debug)]
+#[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Debug,Hash)]
 pub struct Key {
     k: String,
 }

@@ -4,6 +4,10 @@ use std::collections::BinaryHeap;
 use crate::db::key::Key;
 use crate::db::value::Value;
 
+// None if value is deleted
+pub type ValueWithTag=Option<Value>;
+
+
 #[derive(PartialEq, Eq)]
 pub struct KVPair<'a>(&'a (Key, Value), usize);
 
@@ -46,7 +50,6 @@ impl<'a> Iterator for SortedKVIter<'a> {
         let res = self.heap.pop();
         match res {
             Some(reversed_entry) => {
-                // println!("{:?}", (*entry.0).0);
                 let entry = reversed_entry.0;
                 let iter_index = entry.1;
                 let next = self.iters[iter_index].next();

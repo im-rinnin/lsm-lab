@@ -3,6 +3,7 @@ use std::io::Write;
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
+use crate::db::common::ValueWithTag;
 use crate::db::key::Key;
 use crate::db::sstable::SSTableReader;
 use crate::db::value::Value;
@@ -122,12 +123,16 @@ impl BlockBuilder {
         self.content.len()
     }
 
-    pub fn append(&mut self, key: &Key, value: &Value) -> Result<()> {
+    pub fn append(&mut self, key: &Key, value_with_tag: &ValueWithTag) -> Result<()> {
         self.content.write_u16::<LittleEndian>(key.len() as u16)?;
         self.content.write(key.data())?;
 
-        self.content.write_u16::<LittleEndian>(value.len() as u16)?;
-        self.content.write(value.data())?;
+        if let Some(value) = value_with_tag {
+            self.content.write_u16::<LittleEndian>(value.len() as u16)?;
+            self.content.write(value.data())?;
+        } else {
+            self.content.write_u16::<LittleEndian>(0)?;
+        }
         Ok(())
     }
 

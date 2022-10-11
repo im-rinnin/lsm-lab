@@ -12,6 +12,7 @@ mod memtable;
 mod db_meta;
 mod level;
 mod file_store;
+mod common;
 
 pub struct DB {
     path: String,

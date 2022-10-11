@@ -10,3 +10,4 @@ anyhow = { version = "1.0.52", features = ["backtrace"] }
 serde = "1"
 byteorder="1"
 metrics = "0.20.1"
+dashmap="5.4.0"
