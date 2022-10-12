@@ -3,7 +3,7 @@ use std::io::Write;
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::db::common::ValueWithTag;
+use crate::db::common::ValueRefWithTag;
 use crate::db::key::Key;
 use crate::db::sstable::SSTableReader;
 use crate::db::value::Value;
@@ -123,7 +123,7 @@ impl BlockBuilder {
         self.content.len()
     }
 
-    pub fn append(&mut self, key: &Key, value_with_tag: &ValueWithTag) -> Result<()> {
+    pub fn append(&mut self, key: &Key, value_with_tag: ValueRefWithTag) -> Result<()> {
         self.content.write_u16::<LittleEndian>(key.len() as u16)?;
         self.content.write(key.data())?;
 
@@ -159,7 +159,7 @@ mod test {
         let mut content: Vec<u8> = Vec::new();
         let number = 100;
         for i in 0..number {
-            b_builder.append(&Key::new(&i.to_string()), &Value::new(&i.to_string())).unwrap();
+            b_builder.append(&Key::new(&i.to_string()), Some(&Value::new(&i.to_string()))).unwrap();
         }
         b_builder.flush(&mut content).unwrap();
         assert_eq!(b_builder.len(), 0);

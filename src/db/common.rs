@@ -5,7 +5,8 @@ use crate::db::key::Key;
 use crate::db::value::Value;
 
 // None if value is deleted
-pub type ValueWithTag=Option<Value>;
+pub type ValueRefWithTag<'a>=Option<&'a Value>;
+pub type ValueWithTag =Option<Value>;
 
 
 #[derive(PartialEq, Eq)]

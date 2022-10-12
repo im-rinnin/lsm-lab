@@ -1,9 +1,10 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+
 use dashmap::DashMap;
 use dashmap::iter::Iter;
-use crate::db::common::ValueWithTag;
 
+use crate::db::common::{ValueRefWithTag, ValueWithTag};
 use crate::db::key::Key;
 use crate::db::value::Value;
 
@@ -16,7 +17,6 @@ pub struct MemtableIter<'a>(
     // Iter<'a, Key, Option<Value>>
     BinaryHeap<Reverse<Key>>,
     &'a Memtable,
-
 );
 
 impl Memtable {
@@ -47,32 +47,42 @@ impl Memtable {
         let mut iter = self.hash_map.iter();
 
         let mut heap = BinaryHeap::new();
-        for i in iter{
+        for i in iter {
             heap.push(Reverse(i.key().clone()));
         }
 
-        MemtableIter(heap,self)
+        MemtableIter(heap, self)
     }
 }
 
 
-impl <'a>Iterator for MemtableIter<'a> {
-    type Item = (Key, ValueWithTag);
+impl<'a> Iterator for MemtableIter<'a> {
+    type Item = (&'a Key, &'a ValueWithTag);
 
-    fn next(&mut self) -> Option<Self::Item> {
-
-        if let Some(reversed_key)= self.0.pop(){
-            let key=reversed_key.0;
-            let v = &*self.1.hash_map.get(&key).unwrap();
-            return Some((key, v.clone()));
+    fn next(& mut self) -> Option<Self::Item> {
+        let t = self.0.iter().next();
+        for i in self.0.iter() {
+            let read=self.1.hash_map.into_read_only();
+            let a =read.get(&i.0);
+            let entry_ref = self.1.hash_map.get(&i.0).expect("must exits");
+            let v=entry_ref.value();
+            let k=entry_ref.key();
+            return Some((k,v))
         }
-        None
+        // if let Some(reversed_key)= self.0.pop(){
+        //     let key=reversed_key.0;
+        //     let v = &*self.1.hash_map.get(&key).unwrap();
+        //     return Some((key, v.clone()));
+        // }
+        // None
+        todo!()
     }
 }
 
 #[cfg(test)]
 mod test {
     use dashmap::DashMap;
+
     use crate::db::key::Key;
     use crate::db::memtable::Memtable;
     use crate::db::value::Value;
@@ -91,6 +101,7 @@ mod test {
         assert_eq!(memtable.delete(&Key::new("c")).unwrap(), Value::new("c"));
         assert!(memtable.get(&Key::new("c")).is_none());
     }
+
     #[test]
     fn test_memtable_iter() {
         let mut memtable = Memtable::new();
@@ -100,10 +111,9 @@ mod test {
 
         let it = memtable.to_iter();
         let mut s = String::new();
-        for i in it{
+        for i in it {
             s.push_str(i.0.to_string())
         }
         assert_eq!(s, "abc");
-
     }
 }

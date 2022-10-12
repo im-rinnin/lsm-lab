@@ -91,7 +91,8 @@ impl SSTable {
             match next_entry {
                 Some((key, value)) => {
                     //     write to block_build
-                    block_builder.append(key, value)?;
+                    // todo
+                    block_builder.append(key, Some(value))?;
                     entry_count += 1;
 
                     next_entry = kv_iters.next();
