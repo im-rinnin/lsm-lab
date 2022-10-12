@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{Read, Write};
 
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -12,8 +12,8 @@ pub const BLOCK_SIZE: usize = 4 * 1024 * 1024;
 
 /// entry format
 /// [key size(u16),key data,value size(u16),value data]
-pub struct Block<'a> {
-    content: &'a Vec<u8>,
+pub struct Block {
+    content: Vec<u8>,
 }
 
 /// data block,4k default
@@ -34,9 +34,9 @@ pub struct BlockMeta {
     entry_number: usize,
 }
 
-impl<'a> Block<'a> {
+impl Block {
     const SIZE_LEN: usize = 2;
-    pub fn new(v: &'a Vec<u8>) -> Self {
+    pub fn new(v: Vec<u8>) -> Self {
         Block { content: v }
     }
 
@@ -90,7 +90,7 @@ impl BlockMeta {
         Ok(())
     }
 
-    pub fn build_block_metas(data: &mut dyn SSTableReader, number: usize) -> Result<Vec<BlockMeta>> {
+    pub fn build_block_metas(data: &mut dyn Read, number: usize) -> Result<Vec<BlockMeta>> {
         let mut count = 0;
         let mut result = Vec::new();
         // let mut position = 0;
@@ -163,7 +163,7 @@ mod test {
         b_builder.flush(&mut content).unwrap();
         assert_eq!(b_builder.len(), 0);
 
-        let block = Block::new(&content);
+        let block = Block::new(content);
         for i in 0..100 {
             assert_eq!(block.find(&Key::new(&i.to_string()), number).unwrap().unwrap(), Value::new(&i.to_string()));
         }
