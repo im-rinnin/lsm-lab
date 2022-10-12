@@ -73,7 +73,7 @@ mod test {
     #[test]
     pub fn test_sorted_kviter() {
         let mut a = vec![(Key::new("a"), Value::new("a")), (Key::new("d"), Value::new("a"))];
-        let mut b = vec![(Key::new("b"), Value::new("a")), (Key::new("s"), Value::new("a"))];
+        let b = vec![(Key::new("b"), Value::new("a")), (Key::new("s"), Value::new("a"))];
         let it = &mut a.iter();
         let it_b = &mut b.iter();
         let kv_iter = SortedKVIter::new(vec![it, it_b]);

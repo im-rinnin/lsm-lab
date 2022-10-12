@@ -114,7 +114,6 @@ impl BlockMeta {
 
 
 impl BlockBuilder {
-    const ENTRY_NUMBER_LEN: usize = 2;
     pub fn new() -> Self {
         BlockBuilder { content: Vec::new() }
     }

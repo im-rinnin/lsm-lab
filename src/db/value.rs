@@ -1,4 +1,4 @@
-#[derive(Clone,Eq,PartialEq,Debug)]
+#[derive(Clone,Eq,PartialEq,Debug,Ord,PartialOrd)]
 pub struct Value {
     v: Vec<u8>,
 }

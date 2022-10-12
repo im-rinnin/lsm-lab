@@ -5,6 +5,7 @@ use std::io::SeekFrom::Start;
 
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use crate::db::common::{ValueRefWithTag};
 
 use crate::db::key::Key;
 use crate::db::sstable::block::{Block, BLOCK_SIZE, BlockBuilder, BlockMeta};
@@ -79,7 +80,7 @@ impl SSTable {
         block.find(key, block_meta.entry_size())
     }
     // build new sstable
-    pub fn build(kv_iters: &mut dyn Iterator<Item=&(Key, Value)>, write: &mut (dyn SStableWriter)) -> Result<()> {
+    pub fn build(kv_iters: &mut dyn Iterator<Item=(&Key, ValueRefWithTag)>, write: &mut (dyn SStableWriter)) -> Result<()> {
         let mut block_builder = BlockBuilder::new();
         let mut entry_count = 0;
         let mut block_metas = Vec::new();
@@ -91,8 +92,7 @@ impl SSTable {
             match next_entry {
                 Some((key, value)) => {
                     //     write to block_build
-                    // todo
-                    block_builder.append(key, Some(value))?;
+                    block_builder.append(key, value)?;
                     entry_count += 1;
 
                     next_entry = kv_iters.next();
@@ -157,7 +157,7 @@ mod test {
         }
         let mut output = vec![0; 20 * number];
 
-        let mut it = data.iter();
+        let mut it = data.iter().map(|e|(&e.0,Some(&e.1)));
         let mut c = Cursor::new(output.as_mut_slice());
         // add data to sstable
         SSTable::build(&mut it, &mut c).unwrap();

@@ -1,25 +1,28 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-use dashmap::DashMap;
-use dashmap::iter::Iter;
+use dashmap::{DashMap, ReadOnlyView};
 
-use crate::db::common::{ValueRefWithTag, ValueWithTag};
+use crate::db::common::{ ValueWithTag};
 use crate::db::key::Key;
 use crate::db::value::Value;
 
 pub struct Memtable {
-    // Value is None if deleted
     hash_map: DashMap<Key, ValueWithTag>,
 }
 
+pub struct MemtableReadOnly {
+    hash_map: ReadOnlyView<Key, ValueWithTag>,
+}
+
 pub struct MemtableIter<'a>(
-    // Iter<'a, Key, Option<Value>>
-    BinaryHeap<Reverse<Key>>,
-    &'a Memtable,
+    BinaryHeap<Reverse<(&'a Key, &'a ValueWithTag)>>
 );
 
 impl Memtable {
+    pub fn to_readonly(self) -> MemtableReadOnly {
+        MemtableReadOnly{hash_map:self.hash_map.into_read_only()}
+    }
     pub fn new() -> Self {
         Memtable { hash_map: DashMap::new() }
     }
@@ -42,16 +45,16 @@ impl Memtable {
         }
         None
     }
+}
 
+impl MemtableReadOnly {
     pub fn to_iter(&self) -> MemtableIter {
         let mut iter = self.hash_map.iter();
-
         let mut heap = BinaryHeap::new();
         for i in iter {
-            heap.push(Reverse(i.key().clone()));
+            heap.push(Reverse((i.0, i.1)));
         }
-
-        MemtableIter(heap, self)
+        MemtableIter(heap)
     }
 }
 
@@ -59,29 +62,17 @@ impl Memtable {
 impl<'a> Iterator for MemtableIter<'a> {
     type Item = (&'a Key, &'a ValueWithTag);
 
-    fn next(& mut self) -> Option<Self::Item> {
-        let t = self.0.iter().next();
-        for i in self.0.iter() {
-            let read=self.1.hash_map.into_read_only();
-            let a =read.get(&i.0);
-            let entry_ref = self.1.hash_map.get(&i.0).expect("must exits");
-            let v=entry_ref.value();
-            let k=entry_ref.key();
-            return Some((k,v))
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(reversed_kv)= self.0.pop(){
+            let (k, v) = reversed_kv.0;
+            return Some((k, v));
         }
-        // if let Some(reversed_key)= self.0.pop(){
-        //     let key=reversed_key.0;
-        //     let v = &*self.1.hash_map.get(&key).unwrap();
-        //     return Some((key, v.clone()));
-        // }
-        // None
-        todo!()
+        None
     }
 }
 
 #[cfg(test)]
 mod test {
-    use dashmap::DashMap;
 
     use crate::db::key::Key;
     use crate::db::memtable::Memtable;
@@ -109,7 +100,8 @@ mod test {
         memtable.insert(&Key::new("c"), &Value::new("c"));
         memtable.insert(&Key::new("b"), &Value::new("b"));
 
-        let it = memtable.to_iter();
+        let memtable_readonly = memtable.to_readonly();
+        let it = memtable_readonly.to_iter();
         let mut s = String::new();
         for i in it {
             s.push_str(i.0.to_string())
