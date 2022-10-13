@@ -4,7 +4,31 @@ pub struct Key {
     k: String,
 }
 
+#[derive(Clone,Copy, Eq, PartialEq, PartialOrd, Ord, Debug,Hash)]
+pub struct KeySlice<'a>{
+    k: &'a [u8],
+}
+
 const KEY_SIZE_LIMIT: usize = 1024;
+
+impl <'a> KeySlice<'a> {
+    pub fn new(data:&'a [u8])->Self{
+        KeySlice {k:data}
+
+    }
+    pub fn as_key(&self)->Key{
+        Key::from(self.k)
+    }
+    pub fn from(key:&'a Key)->Self{
+        KeySlice {k:key.data()}
+    }
+    pub fn len(&self) -> usize {
+        self.k.len()
+    }
+    pub fn data(&self) -> &[u8] {
+        self.k
+    }
+}
 
 impl Key {
     pub fn new(s: &str) -> Self {

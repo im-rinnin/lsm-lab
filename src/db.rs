@@ -1,7 +1,6 @@
 
 use db_meta::DBMeta;
 use key::Key;
-use level::LevelInfos;
 use memtable::Memtable;
 use value::Value;
 
@@ -11,13 +10,14 @@ mod sstable;
 mod memtable;
 mod db_meta;
 mod level;
-mod file_store;
 mod common;
+mod version;
+
 
 pub struct DB {
     path: String,
     db_meta: DBMeta,
-    levels: LevelInfos,
+    // levels: LevelInfos,
     memtables: Memtable,
 }
 

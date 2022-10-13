@@ -3,10 +3,10 @@ use std::io::{Read, Write};
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::db::common::ValueRefWithTag;
-use crate::db::key::Key;
+use crate::db::common::{ValueRefTag };
+use crate::db::key::{Key, KeySlice};
 use crate::db::sstable::SSTableReader;
-use crate::db::value::Value;
+use crate::db::value::{Value, ValueSlice};
 
 pub const BLOCK_SIZE: usize = 4 * 1024 * 1024;
 
@@ -34,6 +34,11 @@ pub struct BlockMeta {
     entry_number: usize,
 }
 
+pub struct BlockIter<'a> {
+    block: &'a Block,
+    next_position: usize,
+}
+
 impl Block {
     const SIZE_LEN: usize = 2;
     pub fn new(v: Vec<u8>) -> Self {
@@ -45,23 +50,47 @@ impl Block {
         let mut count = 0;
         while count < entry_number {
             count += 1;
-            let key_size = (&self.content[position..position + Self::SIZE_LEN]).read_u16::<LittleEndian>()? as usize;
-            position += Self::SIZE_LEN;
+            let (key_content, value_content) = self.read_kv_at(&mut position)?;
 
-            let key_content = &self.content[position..position + key_size];
-            position += key_size;
-            let value_size = (&self.content[position..position + Self::SIZE_LEN]).read_u16::<LittleEndian>()? as usize;
-            position += Self::SIZE_LEN;
-            let value_content = &self.content[position..position + value_size];
-            position += value_size;
-            if key.equal_u8(key_content) {
-                return Ok(Some(Value::from_u8(value_content)));
+            if key.equal_u8(key_content) && value_content.is_some() {
+                return Ok(Some(Value::from_u8(value_content.unwrap())));
             }
         }
         Ok(None)
     }
+
+    // value is none if is deleted
+    fn read_kv_at(&self, mut position: &mut usize) -> Result<(&[u8], Option<&[u8]>)> {
+        let key_size = (&self.content[*position..*position + Self::SIZE_LEN]).read_u16::<LittleEndian>()? as usize;
+        *position += Self::SIZE_LEN;
+
+        let key_content = &self.content[*position..*position + key_size];
+        *position += key_size;
+        let value_size = (&self.content[*position..*position + Self::SIZE_LEN]).read_u16::<LittleEndian>()? as usize;
+        if value_size > 0 {
+            *position += Self::SIZE_LEN;
+            let value_content = &self.content[*position..*position + value_size];
+            *position += value_size;
+            Ok((key_content, Some(value_content)))
+        } else {
+            Ok((key_content, None))
+        }
+    }
 }
 
+impl<'a> Iterator for BlockIter<'a> {
+    type Item = (KeySlice<'a>, ValueRefTag<'a>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.next_position == self.block.content.len() {
+            return None;
+        }
+        let (k, v) = self.block.read_kv_at(&mut self.next_position).unwrap();
+        let next_key_slice = KeySlice::new(k);
+        let next_value_slice = v.map(|data| ValueSlice::new(data));
+        Some((next_key_slice, next_value_slice))
+    }
+}
 
 impl BlockMeta {
     pub fn last_key(&self) -> &Key {
@@ -76,8 +105,8 @@ impl BlockMeta {
     pub fn size(&self) -> usize {
         self.size
     }
-    pub fn new(k: &Key, number: usize, size: usize, block_offset: u64) -> Self {
-        BlockMeta { last_key: k.clone(), entry_number: number, size, block_offset }
+    pub fn new(k: Key, number: usize, size: usize, block_offset: u64) -> Self {
+        BlockMeta { last_key: k, entry_number: number, size, block_offset }
     }
 
     // [key_size,key_content,entry_number]
@@ -106,12 +135,11 @@ impl BlockMeta {
             let size = data.read_u16::<LittleEndian>()?;
             let entry_number = data.read_u16::<LittleEndian>()?;
 
-            result.push(BlockMeta::new(&last_key, entry_number as usize, size as usize, block_offset as u64));
+            result.push(BlockMeta::new(last_key, entry_number as usize, size as usize, block_offset as u64));
         }
         Ok(result)
     }
 }
-
 
 impl BlockBuilder {
     pub fn new() -> Self {
@@ -122,13 +150,13 @@ impl BlockBuilder {
         self.content.len()
     }
 
-    pub fn append(&mut self, key: &Key, value_with_tag: ValueRefWithTag) -> Result<()> {
+    pub fn append(&mut self, key: KeySlice, value_with_tag: ValueRefTag) -> Result<()> {
         self.content.write_u16::<LittleEndian>(key.len() as u16)?;
         self.content.write(key.data())?;
 
-        if let Some(value) = value_with_tag {
-            self.content.write_u16::<LittleEndian>(value.len() as u16)?;
-            self.content.write(value.data())?;
+        if let Some(valueRef) = value_with_tag {
+            self.content.write_u16::<LittleEndian>(valueRef.len() as u16)?;
+            self.content.write(valueRef.data())?;
         } else {
             self.content.write_u16::<LittleEndian>(0)?;
         }
@@ -142,14 +170,14 @@ impl BlockBuilder {
     }
 }
 
-
 #[cfg(test)]
 mod test {
     use std::io::Cursor;
 
     use crate::db::key::Key;
+    use crate::db::key::KeySlice;
     use crate::db::sstable::block::{Block, BlockBuilder, BlockMeta};
-    use crate::db::value::Value;
+    use crate::db::value::{Value, ValueSlice};
 
     #[test]
     fn test_block_builder_and_read() {
@@ -157,9 +185,13 @@ mod test {
 
         let mut content: Vec<u8> = Vec::new();
         let number = 100;
+        let deleted_key=number+1;
+        let key_not_exited=number+2;
         for i in 0..number {
-            b_builder.append(&Key::new(&i.to_string()), Some(&Value::new(&i.to_string()))).unwrap();
+            b_builder.append(KeySlice::new(i.to_string().as_bytes()),
+                             Some(ValueSlice::new(&i.to_string().as_bytes()))).unwrap();
         }
+        b_builder.append(KeySlice::new(deleted_key.to_string().as_bytes()), None);
         b_builder.flush(&mut content).unwrap();
         assert_eq!(b_builder.len(), 0);
 
@@ -167,14 +199,15 @@ mod test {
         for i in 0..100 {
             assert_eq!(block.find(&Key::new(&i.to_string()), number).unwrap().unwrap(), Value::new(&i.to_string()));
         }
-        assert!(block.find(&Key::new(&(number + 1).to_string()), 100).unwrap().is_none());
+        assert!(block.find(&Key::new(&deleted_key.to_string()), 100).unwrap().is_none());
+        assert!(block.find(&Key::new(&key_not_exited.to_string()), 100).unwrap().is_none());
     }
 
     #[test]
     fn test_block_meta_builder_and_read() {
         let mut content = Vec::new();
-        let b1 = BlockMeta::new(&Key::new("a"), 10, 1, 0);
-        let b2 = BlockMeta::new(&Key::new("b"), 5, 2, 100);
+        let b1 = BlockMeta::new(Key::new("a"), 10, 1, 0);
+        let b2 = BlockMeta::new(Key::new("b"), 5, 2, 100);
         b1.write_to_binary(&mut content).unwrap();
         b2.write_to_binary(&mut content).unwrap();
 
@@ -187,5 +220,10 @@ mod test {
         assert_eq!(block_metas[1].size(), 2);
         assert_eq!(block_metas[1].block_offset(), 100);
         assert_eq!(block_metas[1].entry_size(), 5);
+    }
+
+    #[test]
+    fn test_block_meta_builder_and_read() {
+
     }
 }

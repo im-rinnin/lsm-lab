@@ -2,11 +2,11 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
 use crate::db::key::Key;
-use crate::db::value::Value;
+use crate::db::value::{Value, ValueSlice};
 
 // None if value is deleted
-pub type ValueRefWithTag<'a>=Option<&'a Value>;
-pub type ValueWithTag =Option<Value>;
+pub type ValueRefTag<'a> = Option< ValueSlice<'a>>;
+pub type ValueWithTag = Option<Value>;
 
 
 #[derive(PartialEq, Eq)]

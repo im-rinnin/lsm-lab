@@ -1,14 +1,15 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::env::ArgsOs;
-use std::io::{BufReader, BufWriter, Cursor, Read, Seek, Write};
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Cursor, Read, Seek, SeekFrom, Write};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::spawn;
 
-use byteorder::WriteBytesExt;
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use metrics::{Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn, Key, KeyName, Recorder, SharedString, Unit};
 
 #[derive(Default)]
@@ -100,8 +101,25 @@ fn init_print_logger() {
     let recorder = PrintRecorder::default();
     metrics::set_boxed_recorder(Box::new(recorder)).unwrap()
 }
+struct foo{
+    a:u32
+}
+
+impl foo {
+    fn aa<'a>(&'a self)->&'a u32{
+        &self.a
+    }
+}
+
 
 fn main() {
+    let v = vec![1, 2, 3, 4, 9];
+    let mut tmpfile: File = tempfile::tempfile().unwrap();
+    tmpfile.write_u32::<LittleEndian>(32);
+    tmpfile.metadata().unwrap().len();
+    println!("{:}",tmpfile.read_u32::<LittleEndian>().unwrap());
+
+    println!("{:}", v.partition_point(|n|*n<3));
     // let a = 3;
     // init_print_logger();
     // let c = metrics::register_counter!("abc");
@@ -109,14 +127,14 @@ fn main() {
     // c.increment(1);
     //
     // debug().unwrap();
-     use dashmap::DashMap;
-
-     let youtubers = DashMap::new();
-     youtubers.insert("Bosnian Bill", 457000);
-     assert_eq!(*youtubers.get("Bosnian Bill").unwrap(), 457000);
-    let h=youtubers.get("Bosnian Bill").unwrap();
-    let s=*h;
-    thread()
+    //  use dashmap::DashMap;
+    //
+    //  let youtubers = DashMap::new();
+    //  youtubers.insert("Bosnian Bill", 457000);
+    //  assert_eq!(*youtubers.get("Bosnian Bill").unwrap(), 457000);
+    // let h=youtubers.get("Bosnian Bill").unwrap();
+    // let s=*h;
+    // thread()
 }
 
 trait test {}
