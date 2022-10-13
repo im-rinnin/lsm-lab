@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::db::common::{ValueRefTag };
+use crate::db::common::ValueSliceTag;
 use crate::db::key::{Key, KeySlice};
 use crate::db::sstable::SSTableReader;
 use crate::db::value::{Value, ValueSlice};
@@ -73,13 +73,18 @@ impl Block {
             *position += value_size;
             Ok((key_content, Some(value_content)))
         } else {
+            *position += Self::SIZE_LEN;
             Ok((key_content, None))
         }
+    }
+
+    pub fn iter(&self) -> BlockIter {
+        BlockIter { block: self, next_position: 0 }
     }
 }
 
 impl<'a> Iterator for BlockIter<'a> {
-    type Item = (KeySlice<'a>, ValueRefTag<'a>);
+    type Item = (KeySlice<'a>, ValueSliceTag<'a>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.next_position == self.block.content.len() {
@@ -150,7 +155,7 @@ impl BlockBuilder {
         self.content.len()
     }
 
-    pub fn append(&mut self, key: KeySlice, value_with_tag: ValueRefTag) -> Result<()> {
+    pub fn append(&mut self, key: KeySlice, value_with_tag: ValueSliceTag) -> Result<()> {
         self.content.write_u16::<LittleEndian>(key.len() as u16)?;
         self.content.write(key.data())?;
 
@@ -181,26 +186,39 @@ mod test {
 
     #[test]
     fn test_block_builder_and_read() {
-        let mut b_builder = BlockBuilder::new();
+        let data = vec![(1, false), (2, false), (3, true), (6, false), (7, false)];
+        let block = create_block(&data);
 
-        let mut content: Vec<u8> = Vec::new();
-        let number = 100;
-        let deleted_key=number+1;
-        let key_not_exited=number+2;
-        for i in 0..number {
-            b_builder.append(KeySlice::new(i.to_string().as_bytes()),
-                             Some(ValueSlice::new(&i.to_string().as_bytes()))).unwrap();
+        let number = data.len();
+        for (key, is_deleted) in data.iter() {
+            let res = block.find(&Key::new(&key.to_string()), number).unwrap();
+            if *is_deleted {
+                assert!(res.is_none());
+            } else {
+                assert_eq!(res.unwrap(), Value::new(&key.to_string()))
+            }
         }
-        b_builder.append(KeySlice::new(deleted_key.to_string().as_bytes()), None);
+    }
+
+    // true if is deleted
+    fn create_block(input: &Vec<(u32, bool)>) -> Block {
+        let mut b_builder = BlockBuilder::new();
+        let mut content: Vec<u8> = Vec::new();
+        for (number, is_deleted) in input {
+            let number_string = number.to_string();
+            let number_slice = number_string.as_bytes();
+            let key_slice = KeySlice::new(number_slice);
+            let value_slice = if *is_deleted {
+                None
+            } else {
+                Some(ValueSlice::new(number_slice))
+            };
+            b_builder.append(KeySlice::new(number.to_string().as_bytes()),
+                             value_slice).unwrap();
+        }
         b_builder.flush(&mut content).unwrap();
         assert_eq!(b_builder.len(), 0);
-
-        let block = Block::new(content);
-        for i in 0..100 {
-            assert_eq!(block.find(&Key::new(&i.to_string()), number).unwrap().unwrap(), Value::new(&i.to_string()));
-        }
-        assert!(block.find(&Key::new(&deleted_key.to_string()), 100).unwrap().is_none());
-        assert!(block.find(&Key::new(&key_not_exited.to_string()), 100).unwrap().is_none());
+        Block::new(content)
     }
 
     #[test]
@@ -223,7 +241,21 @@ mod test {
     }
 
     #[test]
-    fn test_block_meta_builder_and_read() {
-
+    fn test_block_iter() {
+        let data = vec![(1, false), (2, false), (3, true), (6, false), (7, false)];
+        let block = create_block(&data);
+        let block_iter = block.iter();
+        let mut res = Vec::new();
+        for (key, value) in block_iter {
+            if value.is_some() {
+                assert_eq!(key.data(), value.unwrap().data());
+                res.push((key, false));
+            } else {
+                res.push((key, true));
+            }
+        }
+        for (i,key) in data.iter().enumerate() {
+            assert_eq!(res[i].0.data(),key.0.to_string().as_bytes())
+        }
     }
 }

@@ -6,7 +6,7 @@ use std::io::SeekFrom::Start;
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::db::common::{ValueRefTag, ValueWithTag};
+use crate::db::common::{ValueSliceTag, ValueWithTag};
 use crate::db::key::{Key, KeySlice};
 use crate::db::sstable::block::{Block, BLOCK_SIZE, BlockBuilder, BlockMeta};
 use crate::db::value::Value;
@@ -106,7 +106,7 @@ impl SSTable {
         block.find(key, block_meta.entry_size())
     }
     // build new sstable
-    pub fn build(kv_iters: &mut dyn Iterator<Item=(KeySlice, ValueRefTag)>,
+    pub fn build(kv_iters: &mut dyn Iterator<Item=(KeySlice, ValueSliceTag)>,
                  mut sstable_store: Box<RefCell<dyn SStableStore>>) -> Result<SSTable> {
         let mut block_builder = BlockBuilder::new();
         let mut entry_count = 0;

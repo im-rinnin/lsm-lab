@@ -35,6 +35,10 @@ impl Key {
         assert!(s.len() < KEY_SIZE_LIMIT);
         Key { k: s.to_string() }
     }
+    pub fn from_u32(i:u32)->Self{
+        Self::new(&i.to_string())
+    }
+
     pub fn from(s: &[u8]) -> Self {
         assert!(s.len() < KEY_SIZE_LIMIT);
         Key { k: String::from_utf8(s.to_vec()).unwrap() }
@@ -43,6 +47,10 @@ impl Key {
     pub fn from_u8_vec(v: Vec<u8>) -> Self {
         assert!(v.len() < KEY_SIZE_LIMIT);
         Key { k: String::from_utf8(v).unwrap() }
+    }
+
+    pub fn as_slice(&self)->KeySlice{
+        KeySlice::from(self)
     }
 
     pub fn to_string(&self)->&str{
