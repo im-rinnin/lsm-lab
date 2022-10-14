@@ -1,32 +1,28 @@
+use std::slice::from_raw_parts;
 
-#[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Debug,Hash)]
+#[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Debug, Hash)]
 pub struct Key {
     k: String,
 }
 
-#[derive(Clone,Copy, Eq, PartialEq, PartialOrd, Ord, Debug,Hash)]
-pub struct KeySlice<'a>{
-    k: &'a [u8],
+
+#[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Debug, Hash)]
+pub struct KeySlice {
+    ptr: *const u8,
+    size: usize,
 }
 
 const KEY_SIZE_LIMIT: usize = 1024;
 
-impl <'a> KeySlice<'a> {
-    pub fn new(data:&'a [u8])->Self{
-        KeySlice {k:data}
-
-    }
-    pub fn as_key(&self)->Key{
-        Key::from(self.k)
-    }
-    pub fn from(key:&'a Key)->Self{
-        KeySlice {k:key.data()}
+impl KeySlice {
+    pub fn new(data: &[u8]) -> Self {
+        KeySlice { ptr: data.as_ptr(), size: data.len() }
     }
     pub fn len(&self) -> usize {
-        self.k.len()
+        self.size
     }
-    pub fn data(&self) -> &[u8] {
-        self.k
+    pub unsafe fn data(&self) -> &[u8] {
+        from_raw_parts(self.ptr, self.size)
     }
 }
 
@@ -35,7 +31,7 @@ impl Key {
         assert!(s.len() < KEY_SIZE_LIMIT);
         Key { k: s.to_string() }
     }
-    pub fn from_u32(i:u32)->Self{
+    pub fn from_u32(i: u32) -> Self {
         Self::new(&i.to_string())
     }
 
@@ -49,11 +45,7 @@ impl Key {
         Key { k: String::from_utf8(v).unwrap() }
     }
 
-    pub fn as_slice(&self)->KeySlice{
-        KeySlice::from(self)
-    }
-
-    pub fn to_string(&self)->&str{
+    pub fn to_string(&self) -> &str {
         &self.k
     }
 

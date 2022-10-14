@@ -118,15 +118,17 @@ impl SSTable {
         let mut next_entry = kv_iters.next();
         loop {
             match next_entry {
-                Some((key, value)) => {
+                Some((key_slice, value)) => {
                     //     write to block_build
-                    block_builder.append(key, value)?;
+                    block_builder.append(key_slice, value)?;
                     entry_count += 1;
 
                     next_entry = kv_iters.next();
                     //     check block_builder size, if is more than 4k flush it
                     if block_builder.len() > BLOCK_SIZE || next_entry.is_none() {
-                        block_metas.push(BlockMeta::new(key.as_key(), entry_count, block_builder.len(), last_block_position));
+                        unsafe {
+                            block_metas.push(BlockMeta::new(Key::from(key_slice.data()), entry_count, block_builder.len(), last_block_position));
+                        }
                         block_builder.flush(read_and_write.as_write())?;
                         entry_count = 0;
                         last_block_position = read_and_write.stream_position()?;
@@ -219,7 +221,8 @@ mod test {
         }
         let mut output = vec![0; 20 * number];
 
-        let mut it = data.iter().map(|e| (KeySlice::from(&e.0), Some(ValueSlice::new(e.1.data()))));
+        let mut it = data.iter().map(|e| (KeySlice::new(e.0.data()),
+                                          Some(ValueSlice::new(e.1.data()))));
         let mut c = Cursor::new(output);
         let sstable = SSTable::build(&mut it, Box::new(RefCell::new(c))).unwrap();
 
@@ -231,6 +234,6 @@ mod test {
 
     #[test]
     fn test_build_sstable_on_file() {
-    //     todo
+        //     todo
     }
 }

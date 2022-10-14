@@ -5,7 +5,7 @@ use crate::db::key::Key;
 use crate::db::value::{Value, ValueSlice};
 
 // None if value is deleted
-pub type ValueSliceTag<'a> = Option< ValueSlice<'a>>;
+pub type ValueSliceTag = Option<ValueSlice>;
 pub type ValueWithTag = Option<Value>;
 
 

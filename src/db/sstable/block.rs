@@ -84,7 +84,7 @@ impl Block {
 }
 
 impl<'a> Iterator for BlockIter<'a> {
-    type Item = (KeySlice<'a>, ValueSliceTag<'a>);
+    type Item = (KeySlice, ValueSliceTag);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.next_position == self.block.content.len() {
@@ -157,11 +157,13 @@ impl BlockBuilder {
 
     pub fn append(&mut self, key: KeySlice, value_with_tag: ValueSliceTag) -> Result<()> {
         self.content.write_u16::<LittleEndian>(key.len() as u16)?;
-        self.content.write(key.data())?;
+        unsafe {
+            self.content.write(key.data())?;
+        }
 
         if let Some(valueRef) = value_with_tag {
             self.content.write_u16::<LittleEndian>(valueRef.len() as u16)?;
-            self.content.write(valueRef.data())?;
+            unsafe { self.content.write(valueRef.data())?; }
         } else {
             self.content.write_u16::<LittleEndian>(0)?;
         }
@@ -248,14 +250,18 @@ mod test {
         let mut res = Vec::new();
         for (key, value) in block_iter {
             if value.is_some() {
-                assert_eq!(key.data(), value.unwrap().data());
+                unsafe {
+                    assert_eq!(key.data(), value.unwrap().data());
+                }
                 res.push((key, false));
             } else {
                 res.push((key, true));
             }
         }
-        for (i,key) in data.iter().enumerate() {
-            assert_eq!(res[i].0.data(),key.0.to_string().as_bytes())
+        for (i, key) in data.iter().enumerate() {
+            unsafe {
+                assert_eq!(res[i].0.data(), key.0.to_string().as_bytes())
+            }
         }
     }
 }
