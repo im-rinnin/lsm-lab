@@ -22,15 +22,18 @@ mod block;
 /// block meta number (u64)
 /// block meta offset (u64)
 pub struct SSTable {
+    sstable_metas: SStableMeta,
+    reader: Box<RefCell<dyn SSTableReader>>,
+}
+
+pub struct SStableMeta {
     block_metas: Vec<BlockMeta>,
-    reader: Box<RefCell<dyn SStableStore>>,
     block_metas_offset: u64,
 }
 
 pub trait SStableStore: Write + Seek + Read {
     fn len(&self) -> u64;
     fn as_write(&mut self) -> &mut dyn Write;
-    fn as_reader(&mut self) -> &mut dyn Read;
 }
 
 pub trait SStableWriter: Write + Seek {
@@ -76,8 +79,11 @@ impl<W: SStableWriter> Write for WriterMetric<W> {
 }
 
 impl SSTable {
-    pub fn new(reader: Box<RefCell<dyn SStableStore>>) -> Result<Self> {
-        let mut reader_ref = reader.borrow_mut();
+    pub fn from(sstable_metas: SStableMeta, store: Box<RefCell<dyn SSTableReader>>) -> Result<Self> {
+        Ok(SSTable { sstable_metas, reader: store })
+    }
+    pub fn new(store: Box<RefCell<dyn SSTableReader>>) -> Result<Self> {
+        let mut reader_ref = store.borrow_mut();
         // block meta number (u64)
         // block meta offset (u64)
         // 8+8=16
@@ -85,19 +91,19 @@ impl SSTable {
         let block_metas_number = reader_ref.as_reader().read_u64::<LittleEndian>()?;
         let block_metas_offset = reader_ref.as_reader().read_u64::<LittleEndian>()?;
         reader_ref.seek(SeekFrom::Start(block_metas_offset))?;
-        let metas = BlockMeta::build_block_metas(&mut *reader_ref.as_reader(), block_metas_number as usize)?;
+        let block_metas = BlockMeta::build_block_metas(&mut *reader_ref.as_reader(), block_metas_number as usize)?;
         drop(reader_ref);
-        Ok(SSTable { block_metas: metas, reader, block_metas_offset })
+        Ok(SSTable { sstable_metas: SStableMeta { block_metas, block_metas_offset }, reader: store })
     }
     pub fn last_key(&self) -> &Key {
-        self.block_metas.last().unwrap().last_key()
+        self.sstable_metas.block_metas.last().unwrap().last_key()
     }
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
         assert!(self.last_key().ge(key));
-        let block_position = self.block_metas.partition_point(|meta| {
+        let block_position = self.sstable_metas.block_metas.partition_point(|meta| {
             meta.last_key().lt(key)
         });
-        let block_meta = &self.block_metas[block_position];
+        let block_meta = &self.sstable_metas.block_metas[block_position];
         let mut read_ref = self.reader.borrow_mut();
         read_ref.seek(Start(block_meta.block_offset()))?;
         let mut data = vec![0; block_meta.size()];
@@ -107,13 +113,11 @@ impl SSTable {
     }
     // build new sstable
     pub fn build(kv_iters: &mut dyn Iterator<Item=(KeySlice, ValueSliceTag)>,
-                 mut sstable_store: Box<RefCell<dyn SStableStore>>) -> Result<SSTable> {
+                 sstable_store: &mut dyn SStableStore) -> Result<SStableMeta> {
         let mut block_builder = BlockBuilder::new();
         let mut entry_count = 0;
         let mut block_metas = Vec::new();
         let mut last_block_position = 0;
-        let mut read_and_write = sstable_store.borrow_mut();
-
 
         let mut next_entry = kv_iters.next();
         loop {
@@ -129,9 +133,9 @@ impl SSTable {
                         unsafe {
                             block_metas.push(BlockMeta::new(Key::from(key_slice.data()), entry_count, block_builder.len(), last_block_position));
                         }
-                        block_builder.flush(read_and_write.as_write())?;
+                        block_builder.flush(sstable_store.as_write())?;
                         entry_count = 0;
-                        last_block_position = read_and_write.stream_position()?;
+                        last_block_position = sstable_store.stream_position()?;
                     }
                 }
                 None => { break; }
@@ -139,19 +143,21 @@ impl SSTable {
         }
 
         // write block meta
-        let block_metas_offset = read_and_write.stream_position()?;
+        let block_metas_offset = sstable_store.stream_position()?;
         for block_meta in &block_metas {
-            block_meta.write_to_binary(read_and_write.as_write())?;
+            block_meta.write_to_binary(sstable_store.as_write())?;
         }
         // write block meta number
-        read_and_write.write_u64::<LittleEndian>(block_metas.len() as u64)?;
-        read_and_write.write_u64::<LittleEndian>(block_metas_offset)?;
-        drop(read_and_write);
-        Ok(SSTable { block_metas, reader: sstable_store, block_metas_offset })
+        sstable_store.write_u64::<LittleEndian>(block_metas.len() as u64)?;
+        sstable_store.write_u64::<LittleEndian>(block_metas_offset)?;
+        drop(sstable_store);
+
+        Ok(SStableMeta { block_metas, block_metas_offset })
     }
 
+
     fn block_metas_offset(&self) -> SeekFrom {
-        SeekFrom::Start(self.block_metas_offset)
+        SeekFrom::Start(self.sstable_metas.block_metas_offset)
     }
 }
 
@@ -170,9 +176,6 @@ impl SStableStore for File {
         self
     }
 
-    fn as_reader(&mut self) -> &mut dyn Read {
-        self
-    }
 }
 
 // use cursor for test
@@ -182,10 +185,6 @@ impl SStableStore for Cursor<Vec<u8>> {
     }
 
     fn as_write(&mut self) -> &mut dyn Write {
-        self
-    }
-
-    fn as_reader(&mut self) -> &mut dyn Read {
         self
     }
 }
@@ -201,7 +200,6 @@ impl SStableWriter for Cursor<&mut [u8]> {
         self
     }
 }
-
 
 #[cfg(test)]
 mod test {
@@ -224,7 +222,8 @@ mod test {
         let mut it = data.iter().map(|e| (KeySlice::new(e.0.data()),
                                           Some(ValueSlice::new(e.1.data()))));
         let mut c = Cursor::new(output);
-        let sstable = SSTable::build(&mut it, Box::new(RefCell::new(c))).unwrap();
+        let sstable_metas = SSTable::build(&mut it, &mut c).unwrap();
+        let sstable = SSTable::from(sstable_metas, Box::new(RefCell::new(c))).unwrap();
 
         // check sstable
         for i in 0..number {
