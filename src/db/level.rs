@@ -1,10 +1,11 @@
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
 use crate::db::db_meta::DBMeta;
 use crate::db::key::Key;
-use crate::db::sstable::{SSTable, SStableWriter};
+use crate::db::sstable::{SSTable};
 use crate::db::value::Value;
 
 pub struct Level {
@@ -61,7 +62,7 @@ impl Level {
         todo!()
     }
     // compact n-1 level sstable to this level
-    pub fn compact<'a>(&mut self, input_sstable: &SSTable, stable_writer: &dyn SStableWriter) {
+    pub fn compact<'a>(&mut self, input_sstable: &SSTable, stable_writer: &dyn Write) {
         // find key overlap sstable
         // build new sstable, write to stable_writer
         todo!()
