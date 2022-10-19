@@ -5,15 +5,16 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::db::common::ValueSliceTag;
 use crate::db::key::{Key, KeySlice};
-use crate::db::sstable::SSTableReader;
+use crate::db::sstable::BLOCK_POOL_MEMORY_SIZE;
 use crate::db::value::{Value, ValueSlice};
 
-pub const BLOCK_SIZE: usize = 4 * 1024 * 1024;
+pub const BLOCK_SIZE: usize = 4 * 1024;
 
 /// entry format
 /// [key size(u16),key data,value size(u16),value data]
 pub struct Block {
-    content: Vec<u8>,
+    content: [u8; BLOCK_POOL_MEMORY_SIZE],
+    size: usize,
 }
 
 /// data block,4k default
@@ -34,15 +35,15 @@ pub struct BlockMeta {
     entry_number: usize,
 }
 
-pub struct BlockIter<'a> {
-    block: &'a Block,
+pub struct BlockIter {
+    block: Block,
     next_position: usize,
 }
 
 impl Block {
     const SIZE_LEN: usize = 2;
-    pub fn new(v: Vec<u8>) -> Self {
-        Block { content: v }
+    pub fn new(content: [u8; BLOCK_POOL_MEMORY_SIZE], size: usize) -> Self {
+        Block { content, size }
     }
 
     pub fn find(&self, key: &Key, entry_number: usize) -> Result<Option<Value>> {
@@ -60,7 +61,7 @@ impl Block {
     }
 
     // value is none if is deleted
-    fn read_kv_at(&self, mut position: &mut usize) -> Result<(&[u8], Option<&[u8]>)> {
+    fn read_kv_at(&self, position: &mut usize) -> Result<(&[u8], Option<&[u8]>)> {
         let key_size = (&self.content[*position..*position + Self::SIZE_LEN]).read_u16::<LittleEndian>()? as usize;
         *position += Self::SIZE_LEN;
 
@@ -78,16 +79,16 @@ impl Block {
         }
     }
 
-    pub fn iter(&self) -> BlockIter {
+    pub fn into_iter(self) -> BlockIter {
         BlockIter { block: self, next_position: 0 }
     }
 }
 
-impl<'a> Iterator for BlockIter<'a> {
+impl Iterator for BlockIter {
     type Item = (KeySlice, ValueSliceTag);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.next_position == self.block.content.len() {
+        if self.next_position == self.block.size {
             return None;
         }
         let (k, v) = self.block.read_kv_at(&mut self.next_position).unwrap();
@@ -98,6 +99,9 @@ impl<'a> Iterator for BlockIter<'a> {
 }
 
 impl BlockMeta {
+    pub fn entry_number(&self) -> usize {
+        self.entry_number
+    }
     pub fn last_key(&self) -> &Key {
         &self.last_key
     }
@@ -155,15 +159,15 @@ impl BlockBuilder {
         self.content.len()
     }
 
-    pub fn append(&mut self, key: KeySlice, value_with_tag: ValueSliceTag) -> Result<()> {
-        self.content.write_u16::<LittleEndian>(key.len() as u16)?;
+    pub fn append(&mut self, key_slice: KeySlice, value_with_tag: ValueSliceTag) -> Result<()> {
+        self.content.write_u16::<LittleEndian>(key_slice.len() as u16)?;
         unsafe {
-            self.content.write(key.data())?;
+            self.content.write(key_slice.data())?;
         }
 
-        if let Some(valueRef) = value_with_tag {
-            self.content.write_u16::<LittleEndian>(valueRef.len() as u16)?;
-            unsafe { self.content.write(valueRef.data())?; }
+        if let Some(value_slice) = value_with_tag {
+            self.content.write_u16::<LittleEndian>(value_slice.len() as u16)?;
+            unsafe { self.content.write(value_slice.data())?; }
         } else {
             self.content.write_u16::<LittleEndian>(0)?;
         }
@@ -178,12 +182,13 @@ impl BlockBuilder {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use std::io::Cursor;
 
     use crate::db::key::Key;
     use crate::db::key::KeySlice;
     use crate::db::sstable::block::{Block, BlockBuilder, BlockMeta};
+    use crate::db::sstable::BLOCK_POOL_MEMORY_SIZE;
     use crate::db::value::{Value, ValueSlice};
 
     #[test]
@@ -203,13 +208,12 @@ mod test {
     }
 
     // true if is deleted
-    fn create_block(input: &Vec<(u32, bool)>) -> Block {
+    pub fn create_block(input: &Vec<(u32, bool)>) -> Block {
         let mut b_builder = BlockBuilder::new();
         let mut content: Vec<u8> = Vec::new();
         for (number, is_deleted) in input {
             let number_string = number.to_string();
             let number_slice = number_string.as_bytes();
-            let key_slice = KeySlice::new(number_slice);
             let value_slice = if *is_deleted {
                 None
             } else {
@@ -220,7 +224,11 @@ mod test {
         }
         b_builder.flush(&mut content).unwrap();
         assert_eq!(b_builder.len(), 0);
-        Block::new(content)
+        let mut block_memory: [u8; BLOCK_POOL_MEMORY_SIZE] = [0; BLOCK_POOL_MEMORY_SIZE];
+        for (i, data) in content.iter().enumerate() {
+            block_memory[i] = *data;
+        }
+        Block::new(block_memory, content.len())
     }
 
     #[test]
@@ -246,22 +254,20 @@ mod test {
     fn test_block_iter() {
         let data = vec![(1, false), (2, false), (3, true), (6, false), (7, false)];
         let block = create_block(&data);
-        let block_iter = block.iter();
+        let block_iter = block.into_iter();
         let mut res = Vec::new();
-        for (key, value) in block_iter {
-            if value.is_some() {
-                unsafe {
-                    assert_eq!(key.data(), value.unwrap().data());
+        for (key_slice, value) in block_iter {
+            unsafe {
+                if value.is_some() {
+                    assert_eq!(key_slice.data(), value.unwrap().data());
+                    res.push((Key::from(key_slice.data()), false));
+                } else {
+                    res.push((Key::from(key_slice.data()), true));
                 }
-                res.push((key, false));
-            } else {
-                res.push((key, true));
             }
         }
         for (i, key) in data.iter().enumerate() {
-            unsafe {
-                assert_eq!(res[i].0.data(), key.0.to_string().as_bytes())
-            }
+            assert_eq!(res[i].0.data(), key.0.to_string().as_bytes())
         }
     }
 }

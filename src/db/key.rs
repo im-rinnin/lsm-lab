@@ -12,7 +12,7 @@ pub struct KeySlice {
     size: usize,
 }
 
-const KEY_SIZE_LIMIT: usize = 1024;
+pub const KEY_SIZE_LIMIT: usize = 1024;
 
 impl KeySlice {
     pub fn new(data: &[u8]) -> Self {
