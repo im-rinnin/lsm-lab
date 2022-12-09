@@ -12,5 +12,9 @@ dashmap = "5.4.0"
 tempfile = "3"
 log = "0.4.17"
 
+[profile.dev]
+opt-level = 0
+debug = 2
+
 [profile.test]
-opt-level=3
+opt-level = 3
