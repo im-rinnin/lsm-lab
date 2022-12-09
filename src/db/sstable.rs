@@ -1,9 +1,11 @@
+use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::io::SeekFrom::Start;
 use std::ops::{DerefMut, IndexMut};
 use std::str::from_utf8;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -28,7 +30,7 @@ const BLOCK_POOL_MEMORY_SIZE: usize = 2 * KEY_SIZE_LIMIT + BLOCK_SIZE;
 /// block meta number (u64)
 /// block meta offset (u64)
 pub struct SSTable {
-    sstable_metas: SStableMeta,
+    sstable_metas: Arc<SStableMeta>,
     reader: Box<RefCell<dyn SSTableReader>>,
 }
 
@@ -94,7 +96,7 @@ impl<W: SStableWriter> Write for WriterMetric<W> {
 
 impl SSTable {
     pub const SSTABLE_SIZE_LIMIT: usize = 1024 * 1024 * 4;
-    pub fn from(sstable_metas: SStableMeta, store: Box<RefCell<dyn SSTableReader>>) -> Result<Self> {
+    pub fn from(sstable_metas: Arc<SStableMeta>, store: Box<RefCell<dyn SSTableReader>>) -> Result<Self> {
         Ok(SSTable { sstable_metas, reader: store })
     }
     pub fn new(store: Box<RefCell<dyn SSTableReader>>) -> Result<Self> {
@@ -108,7 +110,8 @@ impl SSTable {
         reader_ref.seek(SeekFrom::Start(block_metas_offset))?;
         let block_metas = BlockMeta::build_block_metas(&mut *reader_ref.as_reader(), block_metas_number as usize)?;
         drop(reader_ref);
-        Ok(SSTable { sstable_metas: SStableMeta { block_metas, block_metas_offset }, reader: store })
+        let sstable_metas = Arc::new(SStableMeta { block_metas, block_metas_offset });
+        Ok(SSTable { sstable_metas, reader: store })
     }
     pub fn last_key(&self) -> &Key {
         self.sstable_metas.block_metas.last().unwrap().last_key()
@@ -234,6 +237,7 @@ pub mod test {
     use std::io::{BufWriter, Cursor, Read, Seek, SeekFrom};
     use std::path::Path;
     use std::str::from_utf8;
+    use std::sync::Arc;
     use std::time::Instant;
 
     use log::{info, trace, warn};
@@ -258,7 +262,7 @@ pub mod test {
         let mut it = data.iter().map(|e| (KeySlice::new(e.0.data()),
                                           Some(ValueSlice::new(e.1.data()))));
         let mut c = Cursor::new(output);
-        let sstable_metas = SSTable::build(&mut it, &mut c).unwrap();
+        let sstable_metas = Arc::new(SSTable::build(&mut it, &mut c).unwrap());
         let sstable = SSTable::from(sstable_metas, Box::new(RefCell::new(c))).unwrap();
 
         // check sstable
@@ -274,7 +278,7 @@ pub mod test {
         let mut it = data.iter().map(|e| (KeySlice::new(e.0.data()),
                                           Some(ValueSlice::new(e.1.data()))));
         let mut c = Cursor::new(output);
-        let sstable_metas = SSTable::build(&mut it, &mut c).unwrap();
+        let sstable_metas = Arc::new(SSTable::build(&mut it, &mut c).unwrap());
         let sstable = SSTable::from(sstable_metas, Box::new(RefCell::new(c))).unwrap();
         sstable
     }
@@ -311,13 +315,13 @@ pub mod test {
         let mut dir = tempdir().unwrap();
         let mut file_manager = FileStorageManager::new(dir.path());
         let mut sstable_2_file = file_manager.new_file().unwrap().0;
-        let sstable_2_meta = SSTable::build(&mut iter_2, &mut sstable_2_file).unwrap();
+        let sstable_2_meta = Arc::new(SSTable::build(&mut iter_2, &mut sstable_2_file).unwrap());
         let sstable_2_on_file = SSTable::from(sstable_2_meta, Box::new(RefCell::new(sstable_2_file))).unwrap();
         let mut sstable_2_on_file_iter = sstable_2_on_file.iter().unwrap();
 
         let mut sorted_kv_iter = SortedKVIter::new(vec![&mut sstable_1_iter, &mut sstable_2_on_file_iter]);
         let mut sstable_3_file = tempfile::tempfile().unwrap();
-        let sstable_3_meta = SSTable::build(&mut sorted_kv_iter, &mut sstable_3_file).unwrap();
+        let sstable_3_meta = Arc::new(SSTable::build(&mut sorted_kv_iter, &mut sstable_3_file).unwrap());
         let sstable_3 = SSTable::from(sstable_3_meta, Box::new(RefCell::new(sstable_3_file))).unwrap();
         let sstable_3_on_file_iter = sstable_3.iter().unwrap();
         for (i, data) in sstable_3_on_file_iter.enumerate() {
