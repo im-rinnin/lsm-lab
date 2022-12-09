@@ -231,15 +231,17 @@ impl SStableWriter for Cursor<Vec<u8>> {
 pub mod test {
     use std::cell::RefCell;
     use std::fs::File;
-    use std::io::{BufWriter, Cursor, Seek};
+    use std::io::{BufWriter, Cursor, Read, Seek, SeekFrom};
     use std::path::Path;
     use std::str::from_utf8;
     use std::time::Instant;
 
     use log::{info, trace, warn};
     use log::Level::Info;
+    use tempfile::tempdir;
 
     use crate::db::common::SortedKVIter;
+    use crate::db::file_storage::FileStorageManager;
     use crate::db::key::{Key, KeySlice};
     use crate::db::sstable::{SSTable, SStableIter};
     use crate::db::value::{Value, ValueSlice};
@@ -306,7 +308,9 @@ pub mod test {
 
         let sstable_2 = build_sstable(0, 10, 2);
         let mut iter_2 = sstable_2.iter().unwrap();
-        let mut sstable_2_file = tempfile::tempfile().unwrap();
+        let mut dir = tempdir().unwrap();
+        let mut file_manager = FileStorageManager::new(dir.path());
+        let mut sstable_2_file = file_manager.new_file().unwrap().0;
         let sstable_2_meta = SSTable::build(&mut iter_2, &mut sstable_2_file).unwrap();
         let sstable_2_on_file = SSTable::from(sstable_2_meta, Box::new(RefCell::new(sstable_2_file))).unwrap();
         let mut sstable_2_on_file_iter = sstable_2_on_file.iter().unwrap();
