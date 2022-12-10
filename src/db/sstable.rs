@@ -113,6 +113,9 @@ impl SSTable {
         let sstable_metas = Arc::new(SStableMeta { block_metas, block_metas_offset });
         Ok(SSTable { sstable_metas, reader: store })
     }
+    pub fn start_key(&self) -> &Key {
+        self.sstable_metas.block_metas.first().unwrap().start_key()
+    }
     pub fn last_key(&self) -> &Key {
         self.sstable_metas.block_metas.last().unwrap().last_key()
     }
@@ -155,6 +158,7 @@ impl SSTable {
         let mut entry_count = 0;
         let mut block_metas = Vec::with_capacity(Self::SSTABLE_SIZE_LIMIT / BLOCK_SIZE as usize);
         let mut last_block_position = 0;
+        let mut start_key = None;
 
         let mut next_entry = kv_iters.next();
         loop {
@@ -164,13 +168,21 @@ impl SSTable {
                     block_builder.append(key_slice, value)?;
                     entry_count += 1;
 
+                    if start_key == None {
+                        unsafe {
+                            start_key = Some(Key::from(key_slice.data()));
+                        }
+                    }
+
                     next_entry = kv_iters.next();
                     //     check block_builder size, if is more than 4k flush it
                     if block_builder.len() > BLOCK_SIZE || next_entry.is_none() {
                         unsafe {
-                            block_metas.push(BlockMeta::new(Key::from(key_slice.data()),
+                            assert!(start_key.is_some());
+                            block_metas.push(BlockMeta::new(start_key.unwrap(), Key::from(key_slice.data()),
                                                             entry_count, block_builder.len(), last_block_position));
                         }
+                        start_key = None;
                         last_block_position += block_builder.len() as u64;
                         block_builder.flush(sstable_writer)?;
                         entry_count = 0;
@@ -292,6 +304,13 @@ pub mod test {
         }
         let output: Vec<u8> = vec![0; 20 * (end_number - start_number) / step];
         (data, output)
+    }
+
+    #[test]
+    fn test_stable_last_key_start_key() {
+        let sstable = build_sstable(100, 200, 1);
+        assert_eq!(sstable.last_key(), &Key::new("199"));
+        assert_eq!(sstable.start_key(), &Key::new("100"));
     }
 
     #[test]

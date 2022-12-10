@@ -29,6 +29,7 @@ pub struct BlockBuilder {
 
 /// [last_key offset, block_size u16,entry_number u16]
 pub struct BlockMeta {
+    start_key: Key,
     last_key: Key,
     block_offset: u64,
     size: usize,
@@ -102,6 +103,9 @@ impl BlockMeta {
     pub fn entry_number(&self) -> usize {
         self.entry_number
     }
+    pub fn start_key(&self) -> &Key {
+        &self.start_key
+    }
     pub fn last_key(&self) -> &Key {
         &self.last_key
     }
@@ -114,12 +118,14 @@ impl BlockMeta {
     pub fn size(&self) -> usize {
         self.size
     }
-    pub fn new(k: Key, number: usize, size: usize, block_offset: u64) -> Self {
-        BlockMeta { last_key: k, entry_number: number, size, block_offset }
+    pub fn new(start_key: Key, k: Key, number: usize, size: usize, block_offset: u64) -> Self {
+        BlockMeta { start_key, last_key: k, entry_number: number, size, block_offset }
     }
 
     // [key_size,key_content,entry_number]
     pub fn write_to_binary(&self, write: &mut dyn Write) -> Result<()> {
+        write.write_u16::<LittleEndian>(self.start_key.len() as u16)?;
+        write.write(self.start_key.data())?;
         write.write_u16::<LittleEndian>(self.last_key.len() as u16)?;
         write.write(self.last_key.data())?;
         write.write_u16::<LittleEndian>(self.block_offset as u16)?;
@@ -134,17 +140,22 @@ impl BlockMeta {
         // let mut position = 0;
         while count < number {
             count += 1;
-            let key_size = data.read_u16::<LittleEndian>()? as usize;
 
-            let mut key_data = vec![0; key_size];
-            data.read_exact(&mut key_data)?;
+            let start_key_size = data.read_u16::<LittleEndian>()? as usize;
+            let mut start_key_data = vec![0; start_key_size];
+            data.read_exact(&mut start_key_data)?;
 
-            let last_key = Key::from_u8_vec(key_data);
+            let last_key_size = data.read_u16::<LittleEndian>()? as usize;
+            let mut last_key_data = vec![0; last_key_size];
+            data.read_exact(&mut last_key_data)?;
+
+            let start_key = Key::from_u8_vec(start_key_data);
+            let last_key = Key::from_u8_vec(last_key_data);
             let block_offset = data.read_u16::<LittleEndian>()?;
             let size = data.read_u16::<LittleEndian>()?;
             let entry_number = data.read_u16::<LittleEndian>()?;
 
-            result.push(BlockMeta::new(last_key, entry_number as usize, size as usize, block_offset as u64));
+            result.push(BlockMeta::new(start_key, last_key, entry_number as usize, size as usize, block_offset as u64));
         }
         Ok(result)
     }
@@ -234,16 +245,18 @@ pub mod test {
     #[test]
     fn test_block_meta_builder_and_read() {
         let mut content = Vec::new();
-        let b1 = BlockMeta::new(Key::new("a"), 10, 1, 0);
-        let b2 = BlockMeta::new(Key::new("b"), 5, 2, 100);
+        let b1 = BlockMeta::new(Key::new("a"), Key::new("x"), 10, 1, 0);
+        let b2 = BlockMeta::new(Key::new("a"), Key::new("b"), 5, 2, 100);
         b1.write_to_binary(&mut content).unwrap();
         b2.write_to_binary(&mut content).unwrap();
 
         let block_metas = BlockMeta::build_block_metas(&mut Cursor::new(content), 2).unwrap();
-        assert_eq!(block_metas[0].last_key(), &Key::new("a"));
+        assert_eq!(block_metas[0].start_key(), &Key::new("a"));
+        assert_eq!(block_metas[0].last_key(), &Key::new("x"));
         assert_eq!(block_metas[0].entry_size(), 10);
         assert_eq!(block_metas[0].size(), 1);
         assert_eq!(block_metas[0].block_offset(), 0);
+        assert_eq!(block_metas[1].start_key(), &Key::new("a"));
         assert_eq!(block_metas[1].last_key(), &Key::new("b"));
         assert_eq!(block_metas[1].size(), 2);
         assert_eq!(block_metas[1].block_offset(), 100);

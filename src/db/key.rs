@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+use std::fmt::{Display, Formatter};
 use std::slice::from_raw_parts;
 
 #[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Debug, Hash)]
@@ -6,10 +8,50 @@ pub struct Key {
 }
 
 
-#[derive(Clone, Copy, Eq, PartialEq, PartialOrd, Ord, Debug, Hash)]
+#[derive(Clone, Eq, Copy, Debug)]
 pub struct KeySlice {
     ptr: *const u8,
     size: usize,
+}
+
+impl Display for KeySlice {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        unsafe {
+            let a = from_raw_parts(self.ptr, self.size);
+            let res = std::str::from_utf8_unchecked(a);
+            write!(f, "{}", res)
+        }
+    }
+}
+
+impl Ord for KeySlice {
+    fn cmp(&self, other: &Self) -> Ordering {
+        unsafe {
+            let a = from_raw_parts(self.ptr, self.size);
+            let b = from_raw_parts(other.ptr, other.size);
+            a.cmp(&b)
+        }
+    }
+}
+
+impl PartialOrd for KeySlice {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        unsafe {
+            let a = from_raw_parts(self.ptr, self.size);
+            let b = from_raw_parts(other.ptr, other.size);
+            a.partial_cmp(&b)
+        }
+    }
+}
+
+impl PartialEq for KeySlice {
+    fn eq(&self, other: &Self) -> bool {
+        unsafe {
+            let a = from_raw_parts(self.ptr, self.size);
+            let b = from_raw_parts(other.ptr, other.size);
+            a.eq(b)
+        }
+    }
 }
 
 pub const KEY_SIZE_LIMIT: usize = 1024;
@@ -59,6 +101,45 @@ impl Key {
 
     pub fn equal_u8(&self, data: &[u8]) -> bool {
         self.data().eq(data)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::cmp::Ordering;
+
+    use crate::db::key::{Key, KeySlice};
+
+    #[test]
+    pub fn test_key_slice_compare() {
+        let a = Key::new("abc");
+        let b = Key::new("abd");
+
+        let a_key_slice = KeySlice::new(a.data());
+        let b_key_slice = KeySlice::new(b.data());
+
+        assert!(!a_key_slice.eq(&b_key_slice));
+        assert_eq!(a_key_slice.cmp(&b_key_slice), Ordering::Less);
+
+        let a = Key::new("abc");
+        let b = Key::new("abc");
+
+
+        let a_key_slice = KeySlice::new(a.data());
+        let b_key_slice = KeySlice::new(b.data());
+
+        assert!(a_key_slice.eq(&b_key_slice));
+        assert_eq!(a_key_slice.cmp(&b_key_slice), Ordering::Equal);
+
+        let a = Key::new("bc");
+        let b = Key::new("abc");
+
+
+        let a_key_slice = KeySlice::new(a.data());
+        let b_key_slice = KeySlice::new(b.data());
+
+        assert!(!a_key_slice.eq(&b_key_slice));
+        assert_eq!(a_key_slice.cmp(&b_key_slice), Ordering::Greater);
     }
 }
 
