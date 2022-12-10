@@ -117,7 +117,9 @@ impl SSTable {
         self.sstable_metas.block_metas.last().unwrap().last_key()
     }
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
-        assert!(self.last_key().ge(key));
+        if self.last_key().lt(key) {
+            return Ok(None);
+        }
         let block_position = self.sstable_metas.block_metas.partition_point(|meta| {
             meta.last_key().lt(key)
         });
@@ -272,7 +274,7 @@ pub mod test {
     }
 
     // build sstable 1->100
-    fn build_sstable(start_number: usize, end_number: usize, step: usize) -> SSTable {
+    pub fn build_sstable(start_number: usize, end_number: usize, step: usize) -> SSTable {
         let (data, output) = create_data(start_number, end_number, step);
 
         let mut it = data.iter().map(|e| (KeySlice::new(e.0.data()),
