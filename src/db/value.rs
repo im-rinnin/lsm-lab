@@ -1,4 +1,6 @@
 use core::slice;
+use std::fmt::{Display, Formatter};
+use std::slice::from_raw_parts;
 
 #[derive(Clone, Eq, PartialEq, Debug, Ord, PartialOrd)]
 pub struct Value {
@@ -24,6 +26,16 @@ impl ValueSlice {
     }
 }
 
+impl Display for ValueSlice{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        unsafe {
+            let a = from_raw_parts(self.ptr, self.size);
+            let res = std::str::from_utf8_unchecked(a);
+            write!(f, "{}", res)
+        }
+    }
+}
+
 const VALUE_SIZE_LIMIT: usize = 1024;
 
 impl Value {
@@ -40,5 +52,18 @@ impl Value {
 
     pub fn len(&self) -> usize {
         self.data().len()
+    }
+}
+
+
+#[cfg(test)]
+mod test {
+    use crate::db::value::{Value, ValueSlice};
+
+    #[test]
+    fn  test_display(){
+        let v=Value::new("123");
+        let v_slice=ValueSlice::new(v.data());
+        assert_eq!(v_slice.to_string(),"123");
     }
 }
