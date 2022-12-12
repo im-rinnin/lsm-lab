@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::db::sstable::{SSTableReader, SStableWriter};
+use crate::db::sstable::{SSTableStorageReader, SStableWriter};
 
 pub type FileId = u32;
 

@@ -1,22 +1,19 @@
-use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::io::SeekFrom::Start;
-use std::ops::{DerefMut, IndexMut};
-use std::str::from_utf8;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 
 use anyhow::Result;
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use log::{info, trace, warn};
+use byteorder::{LittleEndian, WriteBytesExt};
+use log::info;
 
-use crate::db::common::{SortedKVIter, ValueSliceTag};
+use crate::db::common::ValueSliceTag;
 use crate::db::key::{Key, KEY_SIZE_LIMIT, KeySlice};
 use crate::db::sstable::block::{Block, BLOCK_SIZE, BlockBuilder, BlockIter, BlockMeta};
-use crate::db::value::{Value, ValueSlice};
+use crate::db::value::{Value};
 
 mod block;
 
@@ -32,7 +29,7 @@ const BLOCK_POOL_MEMORY_SIZE: usize = 2 * KEY_SIZE_LIMIT + BLOCK_SIZE;
 /// block meta offset (u64)
 pub struct SSTable {
     sstable_metas: Arc<SStableMeta>,
-    reader: Box<RefCell<dyn SSTableReader>>,
+    reader: Box<RefCell<dyn SSTableStorageReader>>,
 }
 
 pub struct SStableMeta {
@@ -40,11 +37,16 @@ pub struct SStableMeta {
     block_metas_offset: u64,
 }
 
+pub struct FileBaseSSTable {
+    path: PathBuf,
+    sstable_meta: Arc<SStableMeta>,
+}
+
 pub trait SStableWriter: Write + Seek {
     fn as_write(&mut self) -> &mut dyn Write;
 }
 
-pub trait SSTableReader: Read + Seek {
+pub trait SSTableStorageReader: Read + Seek {
     fn as_reader(&mut self) -> &mut dyn Read;
 }
 
@@ -97,7 +99,7 @@ impl<W: SStableWriter> Write for WriterMetric<W> {
 
 impl SSTable {
     pub const SSTABLE_SIZE_LIMIT: usize = 1024 * 1024 * 4;
-    pub fn from(sstable_metas: Arc<SStableMeta>, store: Box<RefCell<dyn SSTableReader>>) -> Result<Self> {
+    pub fn from(sstable_metas: Arc<SStableMeta>, store: Box<RefCell<dyn SSTableStorageReader>>) -> Result<Self> {
         Ok(SSTable { sstable_metas, reader: store })
     }
 
@@ -227,7 +229,18 @@ impl Display for SSTable {
     }
 }
 
-impl SSTableReader for File {
+impl FileBaseSSTable {
+    pub fn new(sstable_meta: SStableMeta, path: PathBuf) -> Self {
+        FileBaseSSTable { path, sstable_meta: Arc::new(sstable_meta) }
+    }
+    pub fn new_sstable(&self) -> Result<SSTable> {
+        let file = Box::new(RefCell::new(File::open(self.path.as_path())?));
+        let sstable_meta = self.sstable_meta.clone();
+        SSTable::from(sstable_meta, file)
+    }
+}
+
+impl SSTableStorageReader for File {
     fn as_reader(&mut self) -> &mut dyn Read {
         self
     }
@@ -239,7 +252,7 @@ impl SStableWriter for File {
     }
 }
 
-impl SSTableReader for Cursor<Vec<u8>> {
+impl SSTableStorageReader for Cursor<Vec<u8>> {
     fn as_reader(&mut self) -> &mut dyn Read {
         self
     }
@@ -256,21 +269,16 @@ pub mod test {
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::fs::File;
-    use std::io::{BufWriter, Cursor, Read, Seek, SeekFrom};
-    use std::iter::Map;
-    use std::path::Path;
+    use std::io::{Cursor};
     use std::str::from_utf8;
     use std::sync::Arc;
-    use std::time::Instant;
 
-    use log::{info, trace, warn};
-    use log::Level::Info;
     use tempfile::tempdir;
 
     use crate::db::common::{SortedKVIter, ValueWithTag};
     use crate::db::file_storage::FileStorageManager;
     use crate::db::key::{Key, KeySlice};
-    use crate::db::sstable::{SSTable, SStableIter};
+    use crate::db::sstable::{FileBaseSSTable, SSTable, };
     use crate::db::value::{Value, ValueSlice};
 
     #[test]
@@ -332,7 +340,6 @@ pub mod test {
 
     #[test]
     fn test_stable_iter() {
-        use log::info;
         let sstable = build_sstable(0, 100, 1);
         let iter = sstable.iter().unwrap();
         for (i, kv) in iter.enumerate() {
@@ -350,7 +357,7 @@ pub mod test {
 
         let sstable_2 = build_sstable(0, 10, 2);
         let mut iter_2 = sstable_2.iter().unwrap();
-        let mut dir = tempdir().unwrap();
+        let dir = tempdir().unwrap();
         let mut file_manager = FileStorageManager::new(dir.path());
         let mut sstable_2_file = file_manager.new_file().unwrap().0;
         let sstable_2_meta = Arc::new(SSTable::build(&mut iter_2, &mut sstable_2_file).unwrap());
@@ -373,5 +380,20 @@ pub mod test {
     fn test_sstable_display() {
         let sstable = build_sstable(1, 5, 1);
         assert_eq!(sstable.to_string(), "(key: 1,value: 1)(key: 2,value: 2)(key: 3,value: 3)(key: 4,value: 4)");
+    }
+
+    #[test]
+    fn test_file_sstable() {
+        let dir = tempdir().unwrap();
+        let path = dir.into_path().join("test");
+        let mut file = File::create(path.as_path()).unwrap();
+
+        let sstable = build_sstable(1, 10, 1);
+        let mut iter = sstable.iter().unwrap();
+        let sstable_2 = SSTable::build(&mut iter, &mut file).unwrap();
+
+        let file_sstable = FileBaseSSTable::new(sstable_2, path);
+        let sstable_2_clone = file_sstable.new_sstable().unwrap();
+        assert_eq!(sstable.to_string(), sstable_2_clone.to_string());
     }
 }
