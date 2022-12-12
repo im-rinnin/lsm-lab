@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 use std::cell::RefCell;
+use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::io::SeekFrom::Start;
@@ -99,20 +100,7 @@ impl SSTable {
     pub fn from(sstable_metas: Arc<SStableMeta>, store: Box<RefCell<dyn SSTableReader>>) -> Result<Self> {
         Ok(SSTable { sstable_metas, reader: store })
     }
-    pub fn new(store: Box<RefCell<dyn SSTableReader>>) -> Result<Self> {
-        let mut reader_ref = store.borrow_mut();
-        // block meta number (u64)
-        // block meta offset (u64)
-        // 8+8=16
-        reader_ref.seek(SeekFrom::End(-16))?;
-        let block_metas_number = reader_ref.as_reader().read_u64::<LittleEndian>()?;
-        let block_metas_offset = reader_ref.as_reader().read_u64::<LittleEndian>()?;
-        reader_ref.seek(SeekFrom::Start(block_metas_offset))?;
-        let block_metas = BlockMeta::build_block_metas(&mut *reader_ref.as_reader(), block_metas_number as usize)?;
-        drop(reader_ref);
-        let sstable_metas = Arc::new(SStableMeta { block_metas, block_metas_offset });
-        Ok(SSTable { sstable_metas, reader: store })
-    }
+
     pub fn start_key(&self) -> &Key {
         self.sstable_metas.block_metas.first().unwrap().start_key()
     }
@@ -220,6 +208,25 @@ impl SSTable {
     }
 }
 
+impl Display for SSTable {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let iter = self.iter().unwrap();
+        let mut res = String::new();
+        for i in iter {
+            let k: KeySlice = i.0;
+            let v: ValueSliceTag = i.1;
+            let v_string = if v.is_none() {
+                String::from("None")
+            } else {
+                format!("{}", v.unwrap())
+            };
+            let display = format!("(key: {},value: {})", k, v_string);
+            res.push_str(&display);
+        }
+        write!(f, "{}", res)
+    }
+}
+
 impl SSTableReader for File {
     fn as_reader(&mut self) -> &mut dyn Read {
         self
@@ -247,8 +254,10 @@ impl SStableWriter for Cursor<Vec<u8>> {
 #[cfg(test)]
 pub mod test {
     use std::cell::RefCell;
+    use std::collections::HashMap;
     use std::fs::File;
     use std::io::{BufWriter, Cursor, Read, Seek, SeekFrom};
+    use std::iter::Map;
     use std::path::Path;
     use std::str::from_utf8;
     use std::sync::Arc;
@@ -258,7 +267,7 @@ pub mod test {
     use log::Level::Info;
     use tempfile::tempdir;
 
-    use crate::db::common::SortedKVIter;
+    use crate::db::common::{SortedKVIter, ValueWithTag};
     use crate::db::file_storage::FileStorageManager;
     use crate::db::key::{Key, KeySlice};
     use crate::db::sstable::{SSTable, SStableIter};
@@ -285,22 +294,30 @@ pub mod test {
         }
     }
 
-    // build sstable 1->100
-    pub fn build_sstable(start_number: usize, end_number: usize, step: usize) -> SSTable {
-        let (data, output) = create_data(start_number, end_number, step);
+    pub fn build_sstable_with_special_value(start_number: usize, end_number: usize, step: usize, manual_set_value: HashMap<usize, ValueWithTag>) -> SSTable {
+        let (data, output) = create_data(start_number, end_number, step, manual_set_value);
 
         let mut it = data.iter().map(|e| (KeySlice::new(e.0.data()),
-                                          Some(ValueSlice::new(e.1.data()))));
+                                          e.1.as_ref().map(|f| ValueSlice::new(f.data()))));
         let mut c = Cursor::new(output);
         let sstable_metas = Arc::new(SSTable::build(&mut it, &mut c).unwrap());
         let sstable = SSTable::from(sstable_metas, Box::new(RefCell::new(c))).unwrap();
         sstable
     }
 
-    fn create_data(start_number: usize, end_number: usize, step: usize) -> (Vec<(Key, Value)>, Vec<u8>) {
+    // build sstable 1->100
+    pub fn build_sstable(start_number: usize, end_number: usize, step: usize) -> SSTable {
+        build_sstable_with_special_value(start_number, end_number, step, HashMap::new())
+    }
+
+    fn create_data(start_number: usize, end_number: usize, step: usize, manual_set_value: HashMap<usize, ValueWithTag>) -> (Vec<(Key, ValueWithTag)>, Vec<u8>) {
         let mut data = Vec::new();
         for i in (start_number..end_number).step_by(step) {
-            data.push((Key::new(&i.to_string()), Value::new(&i.to_string())));
+            if manual_set_value.contains_key(&i) {
+                data.push((Key::new(&i.to_string()), manual_set_value.get(&i).unwrap().clone()));
+            } else {
+                data.push((Key::new(&i.to_string()), Some(Value::new(&i.to_string()))));
+            }
         }
         let output: Vec<u8> = vec![0; 20 * (end_number - start_number) / step];
         (data, output)
@@ -350,5 +367,11 @@ pub mod test {
                 assert_eq!(from_utf8(data.0.data()).unwrap(), i.to_string())
             }
         }
+    }
+
+    #[test]
+    fn test_sstable_display() {
+        let sstable = build_sstable(1, 5, 1);
+        assert_eq!(sstable.to_string(), "(key: 1,value: 1)(key: 2,value: 2)(key: 3,value: 3)(key: 4,value: 4)");
     }
 }
