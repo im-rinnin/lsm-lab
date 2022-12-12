@@ -3,7 +3,6 @@ use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::io::SeekFrom::Start;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -11,9 +10,10 @@ use byteorder::{LittleEndian, WriteBytesExt};
 use log::info;
 
 use crate::db::common::ValueSliceTag;
+use crate::db::file_storage::{FileId, FileStorageManager};
 use crate::db::key::{Key, KEY_SIZE_LIMIT, KeySlice};
 use crate::db::sstable::block::{Block, BLOCK_SIZE, BlockBuilder, BlockIter, BlockMeta};
-use crate::db::value::{Value};
+use crate::db::value::Value;
 
 mod block;
 
@@ -37,8 +37,10 @@ pub struct SStableMeta {
     block_metas_offset: u64,
 }
 
+// for share sstable
 pub struct FileBaseSSTable {
-    path: PathBuf,
+    file_id: FileId,
+    file_manager: FileStorageManager,
     sstable_meta: Arc<SStableMeta>,
 }
 
@@ -230,11 +232,11 @@ impl Display for SSTable {
 }
 
 impl FileBaseSSTable {
-    pub fn new(sstable_meta: SStableMeta, path: PathBuf) -> Self {
-        FileBaseSSTable { path, sstable_meta: Arc::new(sstable_meta) }
+    pub fn new(sstable_meta: SStableMeta, file_id: FileId, file_manager: FileStorageManager) -> Self {
+        FileBaseSSTable { file_id, sstable_meta: Arc::new(sstable_meta), file_manager }
     }
-    pub fn new_sstable(&self) -> Result<SSTable> {
-        let file = Box::new(RefCell::new(File::open(self.path.as_path())?));
+    pub fn new_sstable(&mut self) -> Result<SSTable> {
+        let file = Box::new(RefCell::new(self.file_manager.open_file(self.file_id)?));
         let sstable_meta = self.sstable_meta.clone();
         SSTable::from(sstable_meta, file)
     }
@@ -268,8 +270,7 @@ impl SStableWriter for Cursor<Vec<u8>> {
 pub mod test {
     use std::cell::RefCell;
     use std::collections::HashMap;
-    use std::fs::File;
-    use std::io::{Cursor};
+    use std::io::Cursor;
     use std::str::from_utf8;
     use std::sync::Arc;
 
@@ -278,7 +279,7 @@ pub mod test {
     use crate::db::common::{SortedKVIter, ValueWithTag};
     use crate::db::file_storage::FileStorageManager;
     use crate::db::key::{Key, KeySlice};
-    use crate::db::sstable::{FileBaseSSTable, SSTable, };
+    use crate::db::sstable::{FileBaseSSTable, SSTable};
     use crate::db::value::{Value, ValueSlice};
 
     #[test]
@@ -385,14 +386,14 @@ pub mod test {
     #[test]
     fn test_file_sstable() {
         let dir = tempdir().unwrap();
-        let path = dir.into_path().join("test");
-        let mut file = File::create(path.as_path()).unwrap();
+        let mut file_manager = FileStorageManager::new(dir.path());
+        let (mut file, file_id) = file_manager.new_file().unwrap();
 
         let sstable = build_sstable(1, 10, 1);
         let mut iter = sstable.iter().unwrap();
         let sstable_2 = SSTable::build(&mut iter, &mut file).unwrap();
 
-        let file_sstable = FileBaseSSTable::new(sstable_2, path);
+        let mut file_sstable = FileBaseSSTable::new(sstable_2, file_id, file_manager);
         let sstable_2_clone = file_sstable.new_sstable().unwrap();
         assert_eq!(sstable.to_string(), sstable_2_clone.to_string());
     }

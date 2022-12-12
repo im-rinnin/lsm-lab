@@ -9,6 +9,7 @@ use crate::db::sstable::{SSTableStorageReader, SStableWriter};
 
 pub type FileId = u32;
 
+// todo thread safe
 pub struct FileStorageManager {
     home_path: PathBuf,
     next_file_id: FileId,
@@ -23,6 +24,14 @@ impl FileStorageManager {
     }
     pub fn new(home_path: &Path) -> Self {
         Self::from(home_path, START_ID)
+    }
+    // return file for read and write
+    pub fn open_file(&mut self, file_id: FileId) -> Result<File> {
+        assert!(file_id < self.next_file_id);
+        let mut path = self.home_path.clone();
+        path.push(file_id.to_string());
+        let file = File::open(path.as_path())?;
+        Ok(file)
     }
     // return file for read and write
     pub fn new_file(&mut self) -> Result<(File, FileId)> {
