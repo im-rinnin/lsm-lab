@@ -1,5 +1,6 @@
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
+use std::fmt::{Display, Formatter};
 
 use crate::db::key::KeySlice;
 use crate::db::value::{Value, ValueSlice};
@@ -14,6 +15,7 @@ pub struct KVPair((KeySlice, ValueSliceTag), usize);
 
 /// input: sorted kv pair(by key), output: sorted kv pair
 /// if find same key, return the kv from the iter which was the smallest number in the input iter vec
+/// that is to say, overwrite priority is decided by the order in the iters.eg iters[0]>iters[1]>..>iters[n]
 pub struct SortedKVIter<'a> {
     iters: Vec<&'a mut dyn Iterator<Item=(KeySlice, ValueSliceTag)>>,
     heap: BinaryHeap<Reverse<KVPair>>,
