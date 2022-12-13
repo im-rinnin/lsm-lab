@@ -9,7 +9,7 @@ use anyhow::Result;
 use byteorder::{LittleEndian, WriteBytesExt};
 use log::info;
 
-use crate::db::common::ValueSliceTag;
+use crate::db::common::{KVIterItem, ValueSliceTag};
 use crate::db::file_storage::{FileId, FileStorageManager};
 use crate::db::key::{Key, KEY_SIZE_LIMIT, KeySlice};
 use crate::db::sstable::block::{Block, BLOCK_SIZE, BlockBuilder, BlockIter, BlockMeta};
@@ -72,7 +72,7 @@ impl<'a> SStableIter<'a> {
 }
 
 impl<'a> Iterator for SStableIter<'a> {
-    type Item = (KeySlice, ValueSliceTag);
+    type Item = KVIterItem;
     fn next(&mut self) -> Option<Self::Item> {
         let mut res = self.block_iter.next();
         if let None = res {
@@ -144,7 +144,7 @@ impl SSTable {
     }
     /// build new sstable, may not use out iterator if sstable size reach limit
     /// use BufWriter if possible
-    pub fn build(kv_iters: &mut dyn Iterator<Item=(KeySlice, ValueSliceTag)>,
+    pub fn build(kv_iters: &mut dyn Iterator<Item=KVIterItem>,
                  sstable_writer: &mut dyn Write) -> Result<SStableMeta> {
         let mut block_builder = BlockBuilder::new();
         let mut entry_count = 0;

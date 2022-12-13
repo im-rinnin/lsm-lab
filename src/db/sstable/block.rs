@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::db::common::ValueSliceTag;
+use crate::db::common::{KVIterItem, ValueSliceTag};
 use crate::db::key::{Key, KeySlice};
 use crate::db::sstable::BLOCK_POOL_MEMORY_SIZE;
 use crate::db::value::{Value, ValueSlice};
@@ -86,7 +86,7 @@ impl Block {
 }
 
 impl Iterator for BlockIter {
-    type Item = (KeySlice, ValueSliceTag);
+    type Item = KVIterItem;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.next_position == self.block.size {

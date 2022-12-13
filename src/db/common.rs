@@ -8,16 +8,17 @@ use crate::db::value::{Value, ValueSlice};
 // None if value is deleted
 pub type ValueSliceTag = Option<ValueSlice>;
 pub type ValueWithTag = Option<Value>;
+pub type KVIterItem = (KeySlice, ValueSliceTag);
 
 
 #[derive(PartialEq, Eq)]
-pub struct KVPair((KeySlice, ValueSliceTag), usize);
+pub struct KVPair(KVIterItem, usize);
 
 /// input: sorted kv pair(by key), output: sorted kv pair
 /// if find same key, return the kv from the iter which was the smallest number in the input iter vec
 /// that is to say, overwrite priority is decided by the order in the iters.eg iters[0]>iters[1]>..>iters[n]
 pub struct SortedKVIter<'a> {
-    iters: Vec<&'a mut dyn Iterator<Item=(KeySlice, ValueSliceTag)>>,
+    iters: Vec<&'a mut dyn Iterator<Item=KVIterItem>>,
     heap: BinaryHeap<Reverse<KVPair>>,
 }
 
@@ -38,7 +39,7 @@ impl Ord for KVPair {
 }
 
 impl<'a> SortedKVIter<'a> {
-    pub fn new(mut iters: Vec<&'a mut dyn Iterator<Item=(KeySlice, ValueSliceTag)>>) -> Self {
+    pub fn new(mut iters: Vec<&'a mut dyn Iterator<Item=KVIterItem>>) -> Self {
         let mut heap = BinaryHeap::new();
 
         for (p, iter_ref) in iters.iter_mut().enumerate() {
@@ -75,7 +76,7 @@ impl<'a> SortedKVIter<'a> {
 }
 
 impl<'a> Iterator for SortedKVIter<'a> {
-    type Item = (KeySlice, ValueSliceTag);
+    type Item = KVIterItem;
 
 
     fn next(&mut self) -> Option<Self::Item> {
