@@ -51,6 +51,15 @@ impl FileStorageManager {
         fs::remove_file(path)?;
         Ok(())
     }
+
+    // causes file count decrease
+    pub fn release_file(&mut self, id: FileId) -> Result<()> {
+        todo!()
+    }
+    // delete all unused file
+    pub fn remove_unused_file(&mut self)->Result<()>{
+        todo!()
+    }
 }
 
 
