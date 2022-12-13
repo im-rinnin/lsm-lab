@@ -49,6 +49,10 @@ impl<'a> SortedKVIter<'a> {
         }
         SortedKVIter { iters, heap }
     }
+
+    pub fn has_next(&self) -> bool {
+        self.top().is_some()
+    }
     fn top(&self) -> Option<&KVPair> {
         let res = self.heap.peek();
         res.map(|f| &f.0)
@@ -144,5 +148,17 @@ mod test {
             }
         }
         assert_eq!(s, "a1b1c1d3e2f1");
+    }
+
+    #[test]
+    pub fn test_sorted_kv_iter_top() {
+        let a = vec![(Key::new("a"), Value::new("a1")), (Key::new("b"), Value::new("b1"))];
+        let mut it_a = a.iter().map(|e| (KeySlice::new(e.0.data()),
+                                         Some(ValueSlice::new(e.1.data()))));
+        let mut kv_iter = SortedKVIter::new(vec![&mut it_a]);
+        kv_iter.next();
+        assert!(kv_iter.has_next());
+        kv_iter.next();
+        assert!(!kv_iter.has_next());
     }
 }
