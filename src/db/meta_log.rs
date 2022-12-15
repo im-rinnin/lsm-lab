@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::db::file_storage::{FileId, FileStorageManager};
 
-pub type SequenceNumber =usize;
+pub type SequenceNumber = u32;
 pub struct MetaLog {
     path: PathBuf,
     file: File,
