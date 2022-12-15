@@ -11,12 +11,10 @@ pub struct MetaLog {
 struct Entry {
     size: usize,
     data: Vec<u8>,
-    timestamp: u64,
 }
 
 pub struct LogStoreIterator {
     file: File,
-    timestamp: u64,
 }
 
 impl Iterator for LogStoreIterator {
@@ -37,9 +35,6 @@ impl MetaLog {
         todo!()
     }
 
-    pub fn iter(&self, timestamp: u64) -> LogStoreIterator {
-        todo!()
-    }
     // for db start
     pub fn iter_all(&self) -> LogStoreIterator {
         todo!()
