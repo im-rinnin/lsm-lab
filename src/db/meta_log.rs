@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::db::file_storage::{FileId, FileStorageManager};
 
+pub type SequenceNumber =usize;
 pub struct MetaLog {
     path: PathBuf,
     file: File,
@@ -32,6 +33,10 @@ impl MetaLog {
     }
 
     pub fn add_data(&mut self, data: &Vec<u8>) {
+        todo!()
+    }
+
+    pub fn current_sequence(&self) ->SequenceNumber{
         todo!()
     }
 
