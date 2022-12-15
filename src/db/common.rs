@@ -12,7 +12,7 @@ pub type KVIterItem = (KeySlice, ValueSliceTag);
 
 
 #[derive(PartialEq, Eq)]
-pub struct KVPair(KVIterItem, usize);
+struct KVPair(KVIterItem, usize);
 
 /// input: sorted kv pair(by key), output: sorted kv pair
 /// if find same key, return the kv from the iter which was the smallest number in the input iter vec

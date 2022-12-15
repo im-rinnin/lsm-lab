@@ -1,20 +1,23 @@
+use std::cell::RefCell;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 
 use crate::db::common::{KVIterItem, SortedKVIter, ValueSliceTag};
-use crate::db::db_meta::DBMeta;
 use crate::db::file_storage::{FileId, FileStorageManager};
 use crate::db::key::{Key, KeySlice};
-use crate::db::sstable::{FileBaseSSTable, SSTable, SStableIter, SStableMeta};
+use crate::db::sstable::{SSTable, SStableIter, SStableMeta};
+use crate::db::sstable::sstable_cache::SSTableMetaCache;
 use crate::db::value::{Value, ValueSlice};
 
+// immutable
 pub struct Level {
-    // todo refacto to FileBaseSSTable, and load by need
-    sstables: Vec<SSTable>,
-    sstable_file_ids:Vec<FileId>,
-    file_manager:FileStorageManager,
+    // todo initialize to empty load by need
+    // sstables: Vec<FileBaseSSTable>,
+    sstable_cache: SSTableMetaCache,
+    sstable_file_ids: Vec<FileId>,
+    file_manager: FileStorageManager,
 }
 
 impl Level {
@@ -27,17 +30,17 @@ impl Level {
         // Level { sstables }
     }
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
-        if self.sstables.is_empty() {
-            return Ok(None);
-        }
-        if self.last_key().unwrap().le(key) {
-            println!("last key {:?}", self.last_key());
-            return Ok(None);
-        }
-        // binary search sstable which key range contains key
-        let position = self.sstables.partition_point(|sstable| sstable.last_key().lt(key));
-        // find in sstable
-        self.sstables[position].get(key)
+        // if self.sstables.is_empty() {
+        //     return Ok(None);
+        // }
+        // if self.last_key().unwrap().le(key) {
+        //     return Ok(None);
+        // }
+        // // binary search sstable which key range contains key
+        // let position = self.sstables.partition_point(|sstable| sstable.last_key().lt(key));
+        // // find in sstable
+        // self.sstables[position].get(key)
+        todo!()
     }
 
     // remove
@@ -49,74 +52,77 @@ impl Level {
     }
 
     pub fn len(&self) -> usize {
-        self.sstables.len()
+        todo!()
+        // self.sstables.len()
     }
     fn last_key(&self) -> Option<&Key> {
-        self.sstables.last().map(|sstable| sstable.last_key())
+        todo!()
+        // self.sstables.last().map(|sstable| sstable.last_key())
     }
     fn is_empty(&self) -> bool {
-        self.sstables.is_empty()
+        todo!()
+        // self.sstables.is_empty()
     }
     // find all sstable which key range has overlap in [start_key,end_key]
     fn key_overlap(&self, start_key: &Key, end_key: &Key) -> &[SSTable] {
-        let last_key_option = self.last_key();
-        if last_key_option.is_none() {
-            return &[] as &[SSTable];
-        }
-        let last_key = last_key_option.unwrap();
-        if last_key.lt(&start_key) {
-            return &[] as &[SSTable];
-        }
-        // find first sstable which last key is greater or equal to start_key as first sstable
-        let start = self.sstables.partition_point(|sstable| sstable.last_key().lt(&start_key));
-        // find last sstable which last key is greater or equal to end_key as end sstable
-        if last_key.le(&end_key) {
-            return &self.sstables[start..];
-        }
-        let end = self.sstables.partition_point(|sstable| sstable.last_key().lt(&end_key));
-        return &self.sstables[start..end + 1];
+        // let last_key_option = self.last_key();
+        // if last_key_option.is_none() {
+        //     return &[] as &[SSTable];
+        // }
+        // let last_key = last_key_option.unwrap();
+        // if last_key.lt(&start_key) {
+        //     return &[] as &[SSTable];
+        // }
+        // // find first sstable which last key is greater or equal to start_key as first sstable
+        // let start = self.sstables.partition_point(|sstable| sstable.last_key().lt(&start_key));
+        // // find last sstable which last key is greater or equal to end_key as end sstable
+        // if last_key.le(&end_key) {
+        //     return &self.sstables[start..];
+        // }
+        // let end = self.sstables.partition_point(|sstable| sstable.last_key().lt(&end_key));
+        // return &self.sstables[start..end + 1];
+        todo!()
     }
-    // compact n-1 level sstable to this level, return multiple sstable
-    // todo change input_sstables to FileBaseSSTable, remove file manager
-    fn compact_sstable<'a>(&'a mut self, mut input_sstables: Vec<&'a SSTable>, file_manager: &mut FileStorageManager) {
-    //     let start_key: &Key = input_sstables.iter().map(|sstable| sstable.start_key()).min().unwrap();
-    //     let end_key: &Key = input_sstables.iter().map(|sstable| sstable.last_key()).max().unwrap();
-    //     // find key overlap sstable
-    //     let sstable_overlap = self.key_overlap(start_key, end_key);
-    //     for sstable in sstable_overlap {
-    //         input_sstables.push(sstable)
-    //     }
-    //
-    //     let mut input_sstables_iter = Vec::new();
-    //     for sstable in input_sstables {
-    //         let iter = sstable.iter()?;
-    //         input_sstables_iter.push(iter)
-    //     }
-    //
-    //     let mut input_sstable_iter_ref: Vec<&mut SStableIter> = input_sstables_iter.iter_mut().collect();
-    //     let mut sstable_iters: Vec<&mut dyn Iterator<Item=(KeySlice, ValueSliceTag)>> = Vec::new();
-    //     input_sstable_iter_ref.reverse();
-    //     while !input_sstable_iter_ref.is_empty() {
-    //         sstable_iters.push(input_sstable_iter_ref.pop().unwrap());
-    //     }
-    //
-    //     // build new sstable, write to stable_writer
-    //     let mut sorted_iter = SortedKVIter::new(sstable_iters);
-    //     let mut res = Vec::new();
-    //     loop {
-    //         let (mut file, file_id) = file_manager.new_file()?;
-    //         let sstable_meta = SSTable::build(&mut sorted_iter, &mut file)?;
-    //         let sstable = FileBaseSSTable::new(sstable_meta, file_id, file_manager.clone());
-    //         res.push(sstable);
-    //         if !sorted_iter.has_next() {
-    //             break;
-    //         }
-    //     }
-    // //     todo add result sstable to this level, keep the order, remove old sstable
+    // todo compact n-1 level sstable to this level, build new sstable, return all sstable file id after compact, level is unchanged in compact
+    fn compact_sstable<'a>(&'a self, mut input_sstables: Vec<&'a SSTable>) {
+        //     let start_key: &Key = input_sstables.iter().map(|sstable| sstable.start_key()).min().unwrap();
+        //     let end_key: &Key = input_sstables.iter().map(|sstable| sstable.last_key()).max().unwrap();
+        //     // find key overlap sstable
+        //     let sstable_overlap = self.key_overlap(start_key, end_key);
+        //     for sstable in sstable_overlap {
+        //         input_sstables.push(sstable)
+        //     }
+        //
+        //     let mut input_sstables_iter = Vec::new();
+        //     for sstable in input_sstables {
+        //         let iter = sstable.iter()?;
+        //         input_sstables_iter.push(iter)
+        //     }
+        //
+        //     let mut input_sstable_iter_ref: Vec<&mut SStableIter> = input_sstables_iter.iter_mut().collect();
+        //     let mut sstable_iters: Vec<&mut dyn Iterator<Item=(KeySlice, ValueSliceTag)>> = Vec::new();
+        //     input_sstable_iter_ref.reverse();
+        //     while !input_sstable_iter_ref.is_empty() {
+        //         sstable_iters.push(input_sstable_iter_ref.pop().unwrap());
+        //     }
+        //
+        //     // build new sstable, write to stable_writer
+        //     let mut sorted_iter = SortedKVIter::new(sstable_iters);
+        //     let mut res = Vec::new();
+        //     loop {
+        //         let (mut file, file_id) = file_manager.new_file()?;
+        //         let sstable_meta = SSTable::build(&mut sorted_iter, &mut file)?;
+        //         let sstable = FileBaseSSTable::new(sstable_meta, file_id, file_manager.clone());
+        //         res.push(sstable);
+        //         if !sorted_iter.has_next() {
+        //             break;
+        //         }
+        //     }
+        // //     todo add result sstable to this level, keep the order, remove old sstable
     }
 }
 
-impl Iterator for Level{
+impl Iterator for Level {
     type Item = (KVIterItem);
 
     fn next(&mut self) -> Option<Self::Item> {

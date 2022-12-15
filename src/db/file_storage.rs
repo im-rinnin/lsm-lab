@@ -1,14 +1,18 @@
 use std::cell::RefCell;
 use std::fs;
 use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Result;
 
+use crate::db::sstable::{SSTableStorageReader, SStableWriter};
+
 pub type FileId = u32;
 
 #[derive(Clone)]
+// todo thread safe  Arc mutex
 pub struct FileStorageManager {
     home_path: PathBuf,
     next_file_id: Arc<RefCell<FileId>>,
@@ -24,40 +28,42 @@ impl FileStorageManager {
     pub fn new(home_path: &Path) -> Self {
         Self::from(home_path, START_ID)
     }
-    // return file for read and write
+    // return file for read
     pub fn open_file(&mut self, file_id: FileId) -> Result<File> {
-        assert!(file_id < *self.next_file_id.borrow_mut());
-        let mut path = self.home_path.clone();
-        path.push(file_id.to_string());
-        let file = File::open(path.as_path())?;
-        Ok(file)
+        todo!()
+        // assert!(file_id < *self.next_file_id.borrow_mut());
+        // let mut path = self.home_path.clone();
+        // path.push(file_id.to_string());
+        // let file = File::open(path.as_path())?;
+        // Ok(file)
     }
     // return file for read and write
-    pub fn new_file(&mut self) -> Result<(File, FileId)> {
-        let mut path = self.home_path.clone();
-        let id = *self.next_file_id.borrow_mut();
-        *self.next_file_id.borrow_mut() += 1;
-        path.push(id.to_string());
-        File::create(&path)?;
-        let file = File::options()
-            .read(true)
-            .write(true)
-            .open(path)?;
-        Ok((file, id))
+    pub fn new_file(&mut self) -> Result<File> {
+        todo!()
+        // let mut path = self.home_path.clone();
+        // let id = *self.next_file_id.borrow_mut();
+        // *self.next_file_id.borrow_mut() += 1;
+        // path.push(id.to_string());
+        // File::create(&path)?;
+        // let file = File::options()
+        //     .read(true)
+        //     .write(true)
+        //     .open(path)?;
+        // Ok((file, id))
     }
-    pub fn delete(&mut self, id: FileId) -> Result<()> {
-        let mut path = self.home_path.clone();
-        path.push(id.to_string());
-        fs::remove_file(path)?;
-        Ok(())
-    }
+    // pub fn delete(&mut self, id: FileId) -> Result<()> {
+    //     let mut path = self.home_path.clone();
+    //     path.push(id.to_string());
+    //     fs::remove_file(path)?;
+    //     Ok(())
+    // }
 
     // causes file count decrease
     pub fn release_file(&mut self, id: FileId) -> Result<()> {
         todo!()
     }
     // delete all unused file
-    pub fn remove_unused_file(&mut self)->Result<()>{
+    pub fn remove_unused_file(&mut self) -> Result<()> {
         todo!()
     }
 }

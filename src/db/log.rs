@@ -1,5 +1,0 @@
-
-/// memtable
-struct Log{
-
-}

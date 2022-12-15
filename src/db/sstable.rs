@@ -10,12 +10,14 @@ use byteorder::{LittleEndian, WriteBytesExt};
 use log::info;
 
 use crate::db::common::{KVIterItem, ValueSliceTag};
-use crate::db::file_storage::{FileId, FileStorageManager};
+use crate::db::file_storage::{FileStorageManager };
 use crate::db::key::{Key, KEY_SIZE_LIMIT, KeySlice};
 use crate::db::sstable::block::{Block, BLOCK_SIZE, BlockBuilder, BlockIter, BlockMeta};
 use crate::db::value::Value;
 
 mod block;
+pub mod file_base_sstable;
+pub mod sstable_cache;
 
 const BLOCK_POOL_MEMORY_SIZE: usize = 2 * KEY_SIZE_LIMIT + BLOCK_SIZE;
 
@@ -35,13 +37,6 @@ pub struct SSTable {
 pub struct SStableMeta {
     block_metas: Vec<BlockMeta>,
     block_metas_offset: u64,
-}
-
-// for share sstable
-pub struct FileBaseSSTable {
-    file_id: FileId,
-    file_manager: FileStorageManager,
-    sstable_meta: Arc<SStableMeta>,
 }
 
 pub trait SStableWriter: Write + Seek {
@@ -231,17 +226,6 @@ impl Display for SSTable {
     }
 }
 
-impl FileBaseSSTable {
-    pub fn new(sstable_meta: SStableMeta, file_id: FileId, file_manager: FileStorageManager) -> Self {
-        FileBaseSSTable { file_id, sstable_meta: Arc::new(sstable_meta), file_manager }
-    }
-    pub fn new_sstable(&mut self) -> Result<SSTable> {
-        let file = Box::new(RefCell::new(self.file_manager.open_file(self.file_id)?));
-        let sstable_meta = self.sstable_meta.clone();
-        SSTable::from(sstable_meta, file)
-    }
-}
-
 impl SSTableStorageReader for File {
     fn as_reader(&mut self) -> &mut dyn Read {
         self
@@ -280,6 +264,7 @@ pub mod test {
     use crate::db::file_storage::FileStorageManager;
     use crate::db::key::{Key, KeySlice};
     use crate::db::sstable::{FileBaseSSTable, SSTable};
+    use crate::db::sstable::file_base_sstable::FileBaseSSTable;
     use crate::db::value::{Value, ValueSlice};
 
     #[test]
