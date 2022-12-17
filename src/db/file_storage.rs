@@ -1,123 +1,126 @@
-use std::cell::RefCell;
+use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 
-use anyhow::Result;
-
-use crate::db::sstable::{SSTableStorageReader, SStableWriter};
+use anyhow::{Error, Result};
 
 pub type FileId = u32;
 
-#[derive(Clone)]
-// todo thread safe  Arc mutex
+
+// todo need to be thread safe  Arc mutex
+// manager file name allocate
 pub struct FileStorageManager {
     home_path: PathBuf,
-    next_file_id: Arc<RefCell<FileId>>,
+    next_file_id: FileId,
+    all_file_ids: Vec<FileId>,
 }
 
 const START_ID: FileId = 0;
 
 impl FileStorageManager {
-    pub fn from(home_path: &Path, next_file_id: FileId) -> Self {
-        let path = PathBuf::from(home_path);
-        FileStorageManager { home_path: path, next_file_id: Arc::new(RefCell::new(next_file_id)) }
+    pub fn from(home_path: PathBuf) -> Result<Self> {
+        let paths = fs::read_dir(home_path.clone()).unwrap();
+        let mut file_names: Vec<FileId> = Vec::new();
+        for path in paths {
+            match path {
+                Ok(p) => {
+                    let p: PathBuf = p.path();
+                    let file_name = p.file_name().ok_or(Error::msg("file_name not found"))?;
+                    let file_id = file_name.to_str().ok_or(Error::msg("file name to id fail"))?.parse::<u32>().unwrap();
+                    file_names.push(file_id);
+                }
+                Err(e) => { return Err(Error::new(e)); }
+            }
+        };
+        let max_file_id = file_names.iter().max().unwrap();
+        Ok(FileStorageManager { home_path, next_file_id: max_file_id + 1, all_file_ids: file_names })
     }
-    pub fn new(home_path: &Path) -> Self {
-        Self::from(home_path, START_ID)
+    pub fn new(home_path: PathBuf) -> Self {
+        FileStorageManager { home_path, next_file_id: START_ID, all_file_ids: Vec::new() }
     }
-    // return file for read
-    pub fn open_file(&mut self, file_id: FileId) -> Result<File> {
-        todo!()
-        // assert!(file_id < *self.next_file_id.borrow_mut());
-        // let mut path = self.home_path.clone();
-        // path.push(file_id.to_string());
-        // let file = File::open(path.as_path())?;
-        // Ok(file)
-    }
-    // return file for read and write
-    pub fn new_file(&mut self) -> Result<File> {
-        todo!()
-        // let mut path = self.home_path.clone();
-        // let id = *self.next_file_id.borrow_mut();
-        // *self.next_file_id.borrow_mut() += 1;
-        // path.push(id.to_string());
-        // File::create(&path)?;
-        // let file = File::options()
-        //     .read(true)
-        //     .write(true)
-        //     .open(path)?;
-        // Ok((file, id))
-    }
-    // pub fn delete(&mut self, id: FileId) -> Result<()> {
-    //     let mut path = self.home_path.clone();
-    //     path.push(id.to_string());
-    //     fs::remove_file(path)?;
-    //     Ok(())
-    // }
 
-    // causes file count decrease
-    pub fn release_file(&mut self, id: FileId) -> Result<()> {
-        todo!()
+    pub fn new_file(&mut self) -> Result<(File, FileId, PathBuf)> {
+        let file_id = self.next_file_id;
+        let path = self.home_path.clone().join(file_id.to_string());
+        self.all_file_ids.push(self.next_file_id);
+        self.next_file_id += 1;
+        let res = File::create(path.clone())?;
+        Ok((res, file_id, path))
     }
-    // delete all unused file
-    pub fn remove_unused_file(&mut self) -> Result<()> {
-        todo!()
+    // delete all unactivated files
+    pub fn prune_files(&mut self, all_active_file: HashSet<FileId>) -> Result<()> {
+        for file_id in &self.all_file_ids {
+            if !all_active_file.contains(file_id) {
+                fs::remove_file(self.file_path(file_id))?;
+            }
+        }
+        self.all_file_ids.retain(|file_id| all_active_file.contains(file_id));
+        Ok(())
+    }
+
+    pub fn file_path(&self, file_id: &FileId) -> PathBuf {
+        let path = self.home_path.clone().join(file_id.to_string());
+        path
     }
 }
 
-
 #[cfg(test)]
 mod test {
-    use std::io::{Seek, SeekFrom};
+    use std::collections::HashSet;
+    use std::fs;
+    use std::fs::File;
+    use std::path::Path;
 
     use byteorder::{ReadBytesExt, WriteBytesExt};
     use tempfile::tempdir;
 
-    use crate::db::file_storage::{FileStorageManager, START_ID};
+    use crate::db::file_storage::FileStorageManager;
 
     #[test]
     fn test_create_file() {
         let dir = tempdir().unwrap();
-        let mut manager = FileStorageManager::new(dir.path());
-        let id = *manager.next_file_id.borrow();
-        assert_eq!(id, START_ID);
-        let mut file = manager.new_file().unwrap().0;
+        let mut manager = FileStorageManager::new(dir.into_path());
+        let (mut file, file_id, _) = manager.new_file().unwrap();
         let number = 11;
+        assert_eq!(file_id, 0);
         file.write_u8(number).unwrap();
         file.sync_all().unwrap();
-        file.seek(SeekFrom::Start(0)).unwrap();
+        let mut file = File::open(manager.file_path(&file_id)).unwrap();
         let res = file.read_u8().unwrap();
         assert_eq!(res, number);
-        assert_eq!(*manager.next_file_id.borrow(), 1);
-        manager.new_file().unwrap();
-        assert_eq!(*manager.next_file_id.borrow(), 2);
+        let (_, file_id, _) = manager.new_file().unwrap();
+        assert_eq!(file_id, 1);
     }
 
     #[test]
-    fn test_delete_file() {
+    fn test_build_manager_from_exiting_dir() {
         let dir = tempdir().unwrap();
-        let mut manager = FileStorageManager::new(dir.path());
-        let (_, id) = manager.new_file().unwrap();
-        let mut path = dir.into_path();
-        path.push(id.to_string());
-        assert!(path.exists());
-        manager.delete(id).unwrap();
-        assert!(!path.exists());
+        let path = dir.into_path();
+        let mut manager = FileStorageManager::new(path.clone());
+        manager.new_file().unwrap();
+        manager.new_file().unwrap();
+        manager.new_file().unwrap();
+
+        let manager = FileStorageManager::from(path).unwrap();
+        assert_eq!(manager.all_file_ids, vec![0, 1, 2])
     }
 
     #[test]
-    fn test_clone_file_storage() {
-        let path = tempdir().unwrap();
-        let mut file_storage = FileStorageManager::new(path.path());
-        let file_1 = file_storage.new_file().unwrap();
-        let mut file_storage_clone = file_storage.clone();
-        let file_2 = file_storage_clone.new_file().unwrap();
-        let file_3 = file_storage.new_file().unwrap();
-        assert_eq!(file_1.1, 0);
-        assert_eq!(file_2.1, 1);
-        assert_eq!(file_3.1, 2);
+    fn test_prune_file() {
+        let dir = tempdir().unwrap();
+        let mut manager = FileStorageManager::new(dir.into_path());
+        let (_, _, path_a) = manager.new_file().unwrap();
+        let (_, id_b, path_b) = manager.new_file().unwrap();
+
+        let mut set = HashSet::new();
+        set.insert(id_b);
+        manager.prune_files(set).unwrap();
+
+        assert_eq!(manager.all_file_ids, vec![1]);
+
+        assert!(!Path::new(&path_a).exists());
+        assert!(Path::new(&path_b).exists());
+
     }
 }
