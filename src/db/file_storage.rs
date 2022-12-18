@@ -45,10 +45,10 @@ impl FileStorageManager {
 
     pub fn new_file(&mut self) -> Result<(File, FileId, PathBuf)> {
         let file_id = self.next_file_id;
-        let path = self.home_path.clone().join(file_id.to_string());
+        let path = self.file_path(&file_id);
         self.all_file_ids.push(self.next_file_id);
         self.next_file_id += 1;
-        let res = File::create(path.clone())?;
+        let res = File::options().write(true).read(true).create(true).open(path.clone())?;
         Ok((res, file_id, path))
     }
     // delete all unactivated files
@@ -70,15 +70,15 @@ impl FileStorageManager {
 
 #[cfg(test)]
 mod test {
-    use std::{fs, thread};
+    use std::{thread};
     use std::collections::HashSet;
-    use std::fs::File;
+    use std::io::{Seek, SeekFrom};
     use std::path::Path;
 
     use byteorder::{ReadBytesExt, WriteBytesExt};
     use tempfile::tempdir;
 
-    use crate::db::file_storage::{FileStorageManager, ThreadSafeFileManager};
+    use crate::db::file_storage::{FileStorageManager };
 
     #[test]
     fn test_create_file() {
@@ -89,7 +89,7 @@ mod test {
         assert_eq!(file_id, 0);
         file.write_u8(number).unwrap();
         file.sync_all().unwrap();
-        let mut file = File::open(manager.file_path(&file_id)).unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
         let res = file.read_u8().unwrap();
         assert_eq!(res, number);
         let (_, file_id, _) = manager.new_file().unwrap();
@@ -129,20 +129,20 @@ mod test {
     #[test]
     fn test_multiple_thread() {
         let dir = tempdir().unwrap();
-        let mut manager = FileStorageManager::new(dir.into_path());
-        let mut thread_safe_manager = manager.to_thread_safe();
+        let manager = FileStorageManager::new(dir.into_path());
+        let thread_safe_manager = manager.to_thread_safe();
         let mut handles = Vec::new();
-        for i in 0..10 {
+        for _ in 0..10 {
             let manager_clone = thread_safe_manager.clone();
             let handle = thread::spawn(move || {
                 let mut manager = manager_clone.lock().unwrap();
-                manager.new_file();
+                manager.new_file().unwrap();
             });
             handles.push(handle);
         }
         while handles.len() > 0 {
             let handle = handles.pop().unwrap();
-            handle.join();
+            handle.join().unwrap();
         }
         assert_eq!(thread_safe_manager.lock().unwrap().all_file_ids.len(), 10);
     }
