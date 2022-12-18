@@ -1,12 +1,12 @@
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
-use std::io::{Cursor, Read, Seek, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::io::SeekFrom::Start;
 use std::sync::Arc;
 
 use anyhow::Result;
-use byteorder::{LittleEndian, WriteBytesExt};
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use log::info;
 
 use crate::db::common::{KVIterItem, ValueSliceTag};
@@ -35,6 +35,7 @@ pub struct SSTable {
     reader: Box<RefCell<dyn SSTableStorageReader>>,
 }
 
+#[derive(Debug)]
 pub struct SStableMeta {
     block_metas: Vec<BlockMeta>,
     block_metas_offset: u64,
@@ -97,6 +98,19 @@ impl<W: SStableWriter> Write for WriterMetric<W> {
 
 impl SSTable {
     pub const SSTABLE_SIZE_LIMIT: usize = 1024 * 1024 * 4;
+    pub fn get_meta_from_file(file: &mut File) -> Result<SStableMeta> {
+        file.seek(SeekFrom::End(-8))?;
+        let meta_offset = file.read_u64::<LittleEndian>()?;
+        file.seek(SeekFrom::End(-16))?;
+        let meta_number = file.read_u64::<LittleEndian>()?;
+        file.seek(SeekFrom::Start(meta_offset))?;
+        let mut metas = Vec::new();
+        for _ in 0..meta_number {
+            let meta = BlockMeta::read_from_binary(file)?;
+            metas.push(meta);
+        }
+        Ok(SStableMeta { block_metas: metas, block_metas_offset: meta_offset })
+    }
     pub fn from(sstable_metas: Arc<SStableMeta>, store: Box<RefCell<dyn SSTableStorageReader>>) -> Result<Self> {
         Ok(SSTable { sstable_metas, reader: store })
     }
@@ -251,7 +265,7 @@ pub mod test {
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::fs::File;
-    use std::io::Cursor;
+    use std::io::{Cursor, Seek, SeekFrom};
     use std::str::from_utf8;
     use std::sync::Arc;
 
@@ -377,5 +391,21 @@ pub mod test {
         let sstable_2 = SSTable::from(Arc::new(sstable_2_meta), Box::new(RefCell::new(File::open(path.as_path()).unwrap()))).unwrap();
 
         assert_eq!(sstable.to_string(), sstable_2.to_string());
+    }
+
+    #[test]
+    fn test_get_sstable_meta() {
+        let sstable_1 = build_sstable(1, 10, 2);
+        let mut iter_1 = sstable_1.iter().unwrap();
+
+
+        let dir = tempdir().unwrap();
+        let mut file_manager = FileStorageManager::new(dir.into_path());
+        let mut sstable_2_file = file_manager.new_file().unwrap().0;
+        let sstable_2_meta = Arc::new(SSTable::build(&mut iter_1, &mut sstable_2_file).unwrap());
+
+        sstable_2_file.seek(SeekFrom::Start(0)).unwrap();
+        let meta = SSTable::get_meta_from_file(&mut sstable_2_file).unwrap();
+        assert_eq!(format!("{:?}",meta),format!("{:?}",sstable_2_meta))
     }
 }

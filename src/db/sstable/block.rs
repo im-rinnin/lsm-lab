@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use std::io::{Read, Write};
 
 use anyhow::Result;
@@ -28,6 +29,7 @@ pub struct BlockBuilder {
 }
 
 /// [last_key offset, block_size u16,entry_number u16]
+#[derive(Debug)]
 pub struct BlockMeta {
     start_key: Key,
     last_key: Key,
@@ -132,6 +134,24 @@ impl BlockMeta {
         write.write_u16::<LittleEndian>(self.size as u16)?;
         write.write_u16::<LittleEndian>(self.entry_number as u16)?;
         Ok(())
+    }
+
+    pub fn read_from_binary(reader: &mut dyn Read) -> Result<BlockMeta> {
+        let start_key_len = reader.read_u16::<LittleEndian>()?;
+        let mut start_key_data = vec![0; start_key_len as usize];
+        reader.read(&mut start_key_data)?;
+        let start_key = Key::from(&start_key_data);
+
+        let end_key_len = reader.read_u16::<LittleEndian>()?;
+        let mut end_key_data = vec![0; end_key_len as usize];
+        reader.read(&mut end_key_data)?;
+        let last_key = Key::from(&end_key_data);
+
+        let block_offset = reader.read_u16::<LittleEndian>()? as u64;
+        let size = reader.read_u16::<LittleEndian>()? as usize;
+        let entry_number = reader.read_u16::<LittleEndian>()? as usize;
+
+        Ok(BlockMeta { start_key, last_key, block_offset, size, entry_number })
     }
 
     pub fn build_block_metas(data: &mut dyn Read, number: usize) -> Result<Vec<BlockMeta>> {
@@ -240,6 +260,22 @@ pub mod test {
             block_memory[i] = *data;
         }
         Block::new(block_memory, content.len())
+    }
+
+    #[test]
+    fn test_block_meta_write_and_read() {
+        let mut content = Vec::new();
+        let b1 = BlockMeta::new(Key::new("a"), Key::new("x"), 10, 1, 0);
+        let b2 = BlockMeta::new(Key::new("a"), Key::new("b"), 5, 2, 100);
+        b1.write_to_binary(&mut content).unwrap();
+        b2.write_to_binary(&mut content).unwrap();
+
+        let mut data = content.as_slice();
+
+        let b1_read = BlockMeta::read_from_binary(&mut data).unwrap();
+        assert_eq!(format!("{:?}", b1_read), "BlockMeta { start_key: Key { k: \"a\" }, last_key: Key { k: \"x\" }, block_offset: 0, size: 1, entry_number: 10 }");
+        let b2_read = BlockMeta::read_from_binary(&mut data).unwrap();
+        assert_eq!(format!("{:?}", b2_read), "BlockMeta { start_key: Key { k: \"a\" }, last_key: Key { k: \"b\" }, block_offset: 100, size: 2, entry_number: 5 }");
     }
 
     #[test]
