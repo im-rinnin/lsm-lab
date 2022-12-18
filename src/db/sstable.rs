@@ -16,7 +16,6 @@ use crate::db::value::Value;
 
 mod block;
 pub mod file_base_sstable;
-pub mod sstable_cache;
 
 const BLOCK_POOL_MEMORY_SIZE: usize = 2 * KEY_SIZE_LIMIT + BLOCK_SIZE;
 

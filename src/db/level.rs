@@ -8,14 +8,13 @@ use crate::db::common::{KVIterItem, SortedKVIter, ValueSliceTag};
 use crate::db::file_storage::{FileId, FileStorageManager};
 use crate::db::key::{Key, KeySlice};
 use crate::db::sstable::{SSTable, SStableIter, SStableMeta};
-use crate::db::sstable::sstable_cache::SSTableMetaCache;
 use crate::db::value::{Value, ValueSlice};
 
 // immutable
 pub struct Level {
     // todo initialize to empty load by need
     // sstables: Vec<FileBaseSSTable>,
-    sstable_cache: SSTableMetaCache,
+    // sstable_cache: SSTableMetaCache,
     sstable_file_ids: Vec<FileId>,
     file_manager: FileStorageManager,
 }
