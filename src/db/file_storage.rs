@@ -2,13 +2,13 @@ use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Error, Result};
 
 pub type FileId = u32;
+pub type ThreadSafeFileManager = Arc<Mutex<FileStorageManager>>;
 
-
-// todo need to be thread safe  Arc mutex
 // manager file name allocate
 pub struct FileStorageManager {
     home_path: PathBuf,
@@ -19,6 +19,9 @@ pub struct FileStorageManager {
 const START_ID: FileId = 0;
 
 impl FileStorageManager {
+    pub fn to_thread_safe(self) -> ThreadSafeFileManager {
+        Arc::new(Mutex::new(self))
+    }
     pub fn from(home_path: PathBuf) -> Result<Self> {
         let paths = fs::read_dir(home_path.clone()).unwrap();
         let mut file_names: Vec<FileId> = Vec::new();
@@ -67,15 +70,15 @@ impl FileStorageManager {
 
 #[cfg(test)]
 mod test {
+    use std::{fs, thread};
     use std::collections::HashSet;
-    use std::fs;
     use std::fs::File;
     use std::path::Path;
 
     use byteorder::{ReadBytesExt, WriteBytesExt};
     use tempfile::tempdir;
 
-    use crate::db::file_storage::FileStorageManager;
+    use crate::db::file_storage::{FileStorageManager, ThreadSafeFileManager};
 
     #[test]
     fn test_create_file() {
@@ -121,6 +124,26 @@ mod test {
 
         assert!(!Path::new(&path_a).exists());
         assert!(Path::new(&path_b).exists());
+    }
 
+    #[test]
+    fn test_multiple_thread() {
+        let dir = tempdir().unwrap();
+        let mut manager = FileStorageManager::new(dir.into_path());
+        let mut thread_safe_manager = manager.to_thread_safe();
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let manager_clone = thread_safe_manager.clone();
+            let handle = thread::spawn(move || {
+                let mut manager = manager_clone.lock().unwrap();
+                manager.new_file();
+            });
+            handles.push(handle);
+        }
+        while handles.len() > 0 {
+            let handle = handles.pop().unwrap();
+            handle.join();
+        }
+        assert_eq!(thread_safe_manager.lock().unwrap().all_file_ids.len(), 10);
     }
 }
