@@ -7,16 +7,28 @@ use anyhow::Result;
 use crate::db::common::{KVIterItem, SortedKVIter, ValueSliceTag};
 use crate::db::file_storage::{FileId, FileStorageManager};
 use crate::db::key::{Key, KeySlice};
-use crate::db::sstable::{SSTable, SStableIter, SStableMeta};
+use crate::db::sstable::{SSTable, SStableIter};
 use crate::db::value::{Value, ValueSlice};
+
 
 // immutable
 pub struct Level {
     // todo initialize to empty load by need
-    // sstables: Vec<FileBaseSSTable>,
     // sstable_cache: SSTableMetaCache,
-    sstable_file_ids: Vec<FileId>,
+    sstable_file_ids: Vec<SStableFileMeta>,
     file_manager: FileStorageManager,
+}
+
+enum LevelChange {
+    // add new sstable to level start from position_in_level,sstable order is same as sstable_file_metas
+    ADD { level: usize, sstable_file_metas: Vec<SStableFileMeta>, position_in_level: usize },
+    DELETE { level: usize, sstable_file_meta: Vec<FileId> },
+}
+
+pub struct SStableFileMeta {
+    file_id: FileId,
+    start_key: Key,
+    end_key:Key,
 }
 
 impl Level {
@@ -42,10 +54,6 @@ impl Level {
         todo!()
     }
 
-    // remove
-    pub fn remove_sstable(&mut self, file_id: FileId) {
-        todo!()
-    }
     pub fn pick_one_sstable_for_compact(&self) -> FileId {
         todo!()
     }
@@ -57,10 +65,6 @@ impl Level {
     fn last_key(&self) -> Option<&Key> {
         todo!()
         // self.sstables.last().map(|sstable| sstable.last_key())
-    }
-    fn is_empty(&self) -> bool {
-        todo!()
-        // self.sstables.is_empty()
     }
     // find all sstable which key range has overlap in [start_key,end_key]
     fn key_overlap(&self, start_key: &Key, end_key: &Key) -> &[SSTable] {

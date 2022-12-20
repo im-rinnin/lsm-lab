@@ -30,14 +30,13 @@ const BLOCK_POOL_MEMORY_SIZE: usize = 2 * KEY_SIZE_LIMIT + BLOCK_SIZE;
 
 // immutable, own by level
 pub struct SSTable {
-    sstable_metas: Arc<SStableMeta>,
+    sstable_metas: Arc<SStableBlockMeta>,
     reader: Box<RefCell<dyn SSTableStorageReader>>,
 }
 
 #[derive(Debug)]
-pub struct SStableMeta {
+pub struct SStableBlockMeta {
     block_metas: Vec<BlockMeta>,
-    block_metas_offset: u64,
 }
 
 pub trait SStableWriter: Write + Seek {
@@ -97,7 +96,7 @@ impl<W: SStableWriter> Write for WriterMetric<W> {
 
 impl SSTable {
     pub const SSTABLE_SIZE_LIMIT: usize = 1024 * 1024 * 4;
-    pub fn get_meta_from_file(file: &mut File) -> Result<SStableMeta> {
+    pub fn get_meta_from_file(file: &mut File) -> Result<SStableBlockMeta> {
         file.seek(SeekFrom::End(-8))?;
         let meta_offset = file.read_u64::<LittleEndian>()?;
         file.seek(SeekFrom::End(-16))?;
@@ -108,9 +107,9 @@ impl SSTable {
             let meta = BlockMeta::read_from_binary(file)?;
             metas.push(meta);
         }
-        Ok(SStableMeta { block_metas: metas, block_metas_offset: meta_offset })
+        Ok(SStableBlockMeta { block_metas: metas })
     }
-    pub fn from(sstable_metas: Arc<SStableMeta>, store: Box<RefCell<dyn SSTableStorageReader>>) -> Result<Self> {
+    pub fn from(sstable_metas: Arc<SStableBlockMeta>, store: Box<RefCell<dyn SSTableStorageReader>>) -> Result<Self> {
         Ok(SSTable { sstable_metas, reader: store })
     }
 
@@ -154,7 +153,7 @@ impl SSTable {
     /// build new sstable, may not use out iterator if sstable size reach limit
     /// use BufWriter if possible
     pub fn build(kv_iters: &mut dyn Iterator<Item=KVIterItem>,
-                 sstable_writer: &mut dyn Write) -> Result<SStableMeta> {
+                 sstable_writer: &mut dyn Write) -> Result<SStableBlockMeta> {
         let mut block_builder = BlockBuilder::new();
         let mut entry_count = 0;
         let mut block_metas = Vec::with_capacity(Self::SSTABLE_SIZE_LIMIT / BLOCK_SIZE as usize);
@@ -208,7 +207,7 @@ impl SSTable {
 
         drop(sstable_writer);
 
-        Ok(SStableMeta { block_metas, block_metas_offset: last_block_position })
+        Ok(SStableBlockMeta { block_metas })
     }
 
     pub fn iter(&self) -> Result<SStableIter> {
@@ -405,6 +404,6 @@ pub mod test {
 
         sstable_2_file.seek(SeekFrom::Start(0)).unwrap();
         let meta = SSTable::get_meta_from_file(&mut sstable_2_file).unwrap();
-        assert_eq!(format!("{:?}",meta),format!("{:?}",sstable_2_meta))
+        assert_eq!(format!("{:?}", meta), format!("{:?}", sstable_2_meta))
     }
 }

@@ -1,7 +1,10 @@
+use std::cell::RefCell;
 use std::fs::File;
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
+use std::sync::{Arc, mpsc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::thread::{spawn, Thread};
+use std::time::{Duration, Instant};
 
 use byteorder::WriteBytesExt;
 
@@ -26,7 +29,17 @@ fn foo(l: Arc<Mutex<i32>>) {
 
 fn bar() {}
 
+#[derive(Clone)]
+struct TestThread {
+    a: Arc<Mutex<i32>>,
+    b: Arc<Mutex<i32>>,
+}
+
+
 fn main() {
+    let mut a = RefCell::new(Rc::new(3));
+    let mut d = a.borrow_mut();
+    *d=Rc::new(4);
     let data = Arc::new(Mutex::new(0));
     for i in 1..2 {
         let clone = data.clone();
