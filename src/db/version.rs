@@ -13,8 +13,6 @@ use crate::db::value::Value;
 pub struct Version {
     // all level info,order by level number,vec[0]->level 0
     levels: Vec<Level>,
-    // version create time
-    timestamp: u64,
     file_manager: FileStorageManager,
 }
 

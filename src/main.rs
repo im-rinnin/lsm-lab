@@ -37,13 +37,16 @@ struct TestThread {
 
 
 fn main() {
+    let x=Arc::new(Mutex::new(Arc::new(0)));
     let mut a = RefCell::new(Rc::new(3));
     let mut d = a.borrow_mut();
     *d=Rc::new(4);
     let data = Arc::new(Mutex::new(0));
     for i in 1..2 {
+        let m = x.clone();
         let clone = data.clone();
         thread::spawn(move || {
+            let h = m.lock().unwrap();
             foo(clone);
         });
     }

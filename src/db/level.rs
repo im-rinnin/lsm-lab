@@ -3,19 +3,22 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
+use lru::LruCache;
 
 use crate::db::common::{KVIterItem, SortedKVIter, ValueSliceTag};
 use crate::db::file_storage::{FileId, FileStorageManager};
 use crate::db::key::{Key, KeySlice};
-use crate::db::sstable::{SSTable, SStableIter};
+use crate::db::memtable::Memtable;
+use crate::db::sstable::{SSTable, SStableBlockMeta, SStableIter};
 use crate::db::value::{Value, ValueSlice};
 
+type SSTableMetaCache = LruCache<FileId, Arc<SStableBlockMeta>>;
+type ThreadSafeSSTableMetaCache = Arc<Mutex<RefCell<SSTableMetaCache>>>;
 
-// immutable
+// immutable, own by version
 pub struct Level {
-    // todo initialize to empty load by need
-    // sstable_cache: SSTableMetaCache,
-    sstable_file_ids: Vec<SStableFileMeta>,
+    sstable_cache: ThreadSafeSSTableMetaCache,
+    sstable_file_metas: Vec<SStableFileMeta>,
     file_manager: FileStorageManager,
 }
 
@@ -28,12 +31,12 @@ enum LevelChange {
 pub struct SStableFileMeta {
     file_id: FileId,
     start_key: Key,
-    end_key:Key,
+    end_key: Key,
 }
 
 impl Level {
     // sstables is in order
-    pub fn new(sstables: Vec<FileId>, file_manager: FileStorageManager) -> Self {
+    pub fn new(sstables: Vec<SStableFileMeta>, file_manager: FileStorageManager) -> Self {
         todo!()
     }
     pub fn from(sstables: Vec<SSTable>) -> Self {
@@ -51,10 +54,6 @@ impl Level {
         // let position = self.sstables.partition_point(|sstable| sstable.last_key().lt(key));
         // // find in sstable
         // self.sstables[position].get(key)
-        todo!()
-    }
-
-    pub fn pick_one_sstable_for_compact(&self) -> FileId {
         todo!()
     }
 
@@ -86,8 +85,12 @@ impl Level {
         // return &self.sstables[start..end + 1];
         todo!()
     }
+
+    fn add_memtable_to_level_0(&self, memtable: Memtable) -> Vec<SStableFileMeta> {
+        todo!()
+    }
     // todo compact n-1 level sstable to this level, build new sstable, return all sstable file id after compact, level is unchanged in compact
-    fn compact_sstable<'a>(&'a self, mut input_sstables: Vec<&'a SSTable>) {
+    fn compact_sstable<'a>(&'a self, mut input_sstables: Vec<&'a SSTable>) -> Vec<SStableFileMeta> {
         //     let start_key: &Key = input_sstables.iter().map(|sstable| sstable.start_key()).min().unwrap();
         //     let end_key: &Key = input_sstables.iter().map(|sstable| sstable.last_key()).max().unwrap();
         //     // find key overlap sstable
@@ -121,7 +124,7 @@ impl Level {
         //             break;
         //         }
         //     }
-        // //     todo add result sstable to this level, keep the order, remove old sstable
+        todo!()
     }
 }
 
@@ -153,9 +156,10 @@ mod test {
         // println!("{:?}", a.get(&Key::new("56")).unwrap());
         let b = build_sstable(205, 300, 1);
         let c = build_sstable(305, 400, 1);
+        todo!()
 
         // [100-200),[205-300),[305-400)
-        Level::from(vec![a, b, c])
+        // Level::from(vec![a, b, c])
     }
 
     #[test]
