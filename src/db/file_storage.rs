@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Error, Result};
@@ -42,10 +42,13 @@ impl FileStorageManager {
     pub fn new(home_path: PathBuf) -> Self {
         FileStorageManager { home_path, next_file_id: START_ID, all_file_ids: Vec::new() }
     }
+    pub fn new_thread_safe_manager(home_path: PathBuf) -> ThreadSafeFileManager {
+        Arc::new(Mutex::new(FileStorageManager { home_path, next_file_id: START_ID, all_file_ids: Vec::new() }))
+    }
 
     pub fn new_file(&mut self) -> Result<(File, FileId, PathBuf)> {
         let file_id = self.next_file_id;
-        let path = self.file_path(&file_id);
+        let path = FileStorageManager::file_path(self.home_path.as_path(),&file_id);
         self.all_file_ids.push(self.next_file_id);
         self.next_file_id += 1;
         let res = File::options().write(true).read(true).create(true).open(path.clone())?;
@@ -55,22 +58,29 @@ impl FileStorageManager {
     pub fn prune_files(&mut self, all_active_file: HashSet<FileId>) -> Result<()> {
         for file_id in &self.all_file_ids {
             if !all_active_file.contains(file_id) {
-                fs::remove_file(self.file_path(file_id))?;
+                fs::remove_file(FileStorageManager::file_path(self.home_path.as_path(),file_id))?;
             }
         }
         self.all_file_ids.retain(|file_id| all_active_file.contains(file_id));
         Ok(())
     }
 
-    pub fn file_path(&self, file_id: &FileId) -> PathBuf {
-        let path = self.home_path.clone().join(file_id.to_string());
+    pub fn file_path(home_path: &Path, file_id: &FileId) -> PathBuf {
+        let path = home_path.clone().join(file_id.to_string());
         path
     }
+
+    pub fn open_file(home_path:&Path,file_id:&FileId)->Result<File>{
+        let path = Self::file_path(home_path, file_id);
+        let res = File::open(path)?;
+        Ok(res)
+    }
+
 }
 
 #[cfg(test)]
 mod test {
-    use std::{thread};
+    use std::thread;
     use std::collections::HashSet;
     use std::io::{Seek, SeekFrom};
     use std::path::Path;
@@ -78,7 +88,7 @@ mod test {
     use byteorder::{ReadBytesExt, WriteBytesExt};
     use tempfile::tempdir;
 
-    use crate::db::file_storage::{FileStorageManager };
+    use crate::db::file_storage::FileStorageManager;
 
     #[test]
     fn test_create_file() {
