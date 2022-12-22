@@ -1,25 +1,30 @@
 use std::cell::RefCell;
+use std::fs::File;
 use std::io::Write;
+use std::num::NonZeroUsize;
+use std::ops::Deref;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use lru::LruCache;
 
 use crate::db::common::{KVIterItem, SortedKVIter, ValueSliceTag};
-use crate::db::file_storage::{FileId, FileStorageManager};
+use crate::db::file_storage::{FileId, FileStorageManager, ThreadSafeFileManager};
 use crate::db::key::{Key, KeySlice};
-use crate::db::memtable::Memtable;
+use crate::db::memtable::{Memtable, MemtableReadOnly};
 use crate::db::sstable::{SSTable, SStableBlockMeta, SStableIter};
 use crate::db::value::{Value, ValueSlice};
 
-type SSTableMetaCache = LruCache<FileId, Arc<SStableBlockMeta>>;
-type ThreadSafeSSTableMetaCache = Arc<Mutex<RefCell<SSTableMetaCache>>>;
+type SSTableBlockMetaCache = LruCache<FileId, Arc<SStableBlockMeta>>;
+type ThreadSafeSSTableMetaCache = Arc<Mutex<SSTableBlockMetaCache>>;
 
 // immutable, own by version
 pub struct Level {
     sstable_cache: ThreadSafeSSTableMetaCache,
     sstable_file_metas: Vec<SStableFileMeta>,
-    file_manager: FileStorageManager,
+    file_manager: ThreadSafeFileManager,
+    home_path: PathBuf,
 }
 
 enum LevelChange {
@@ -28,141 +33,186 @@ enum LevelChange {
     DELETE { level: usize, sstable_file_meta: Vec<FileId> },
 }
 
+#[derive(Clone)]
 pub struct SStableFileMeta {
     file_id: FileId,
     start_key: Key,
-    end_key: Key,
+    last_key: Key,
 }
 
 impl Level {
     // sstables is in order
-    pub fn new(sstables: Vec<SStableFileMeta>, file_manager: FileStorageManager) -> Self {
-        todo!()
-    }
-    pub fn from(sstables: Vec<SSTable>) -> Self {
-        todo!()
-        // Level { sstables }
+    pub fn new(sstable_metas: Vec<SStableFileMeta>, home_path: PathBuf, cache: ThreadSafeSSTableMetaCache, file_manager: ThreadSafeFileManager) -> Self {
+        Level { sstable_file_metas: sstable_metas, sstable_cache: cache, home_path, file_manager }
     }
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
-        // if self.sstables.is_empty() {
-        //     return Ok(None);
-        // }
-        // if self.last_key().unwrap().le(key) {
-        //     return Ok(None);
-        // }
-        // // binary search sstable which key range contains key
-        // let position = self.sstables.partition_point(|sstable| sstable.last_key().lt(key));
-        // // find in sstable
-        // self.sstables[position].get(key)
-        todo!()
+        assert!(!self.sstable_file_metas.is_empty());
+
+        if self.last_key().le(key) {
+            return Ok(None);
+        }
+        // binary search sstable which key range contains key
+        let position = self.sstable_file_metas.partition_point(|meta| {
+            meta.last_key().lt(key)
+        });
+        // find in sstable
+        let sstable_file_meta: &SStableFileMeta = self.sstable_file_metas.get(position).expect("must find");
+        let file_id = sstable_file_meta.file_id();
+        let sstable_file_meta = self.get_sstable_meta(&file_id)?;
+        let file = File::open(FileStorageManager::file_path(self.home_path.as_path(), &file_id))?;
+        let sstable = SSTable::from(sstable_file_meta, file)?;
+        sstable.get(key)
     }
 
-    pub fn len(&self) -> usize {
-        todo!()
-        // self.sstables.len()
+    fn get_sstable_meta(&self, file_id: &FileId) -> Result<Arc<SStableBlockMeta>> {
+        let mut cache = self.sstable_cache.lock().unwrap();
+        let res = cache.get(file_id);
+        return if res.is_none() {
+            let path = FileStorageManager::file_path(self.home_path.as_path(), file_id);
+            let mut file = File::open(&path)?;
+            let sstable_meta = Arc::new(SSTable::get_meta_from_file(&mut file)?);
+            cache.push(*file_id, sstable_meta.clone());
+            Ok(sstable_meta)
+        } else {
+            Ok(res.unwrap().clone())
+        };
     }
-    fn last_key(&self) -> Option<&Key> {
-        todo!()
-        // self.sstables.last().map(|sstable| sstable.last_key())
+    fn last_key(&self) -> Key {
+        let sstable_meta = self.sstable_file_metas.last().expect("sstable ids wouldn't be empty");
+        sstable_meta.last_key.clone()
     }
     // find all sstable which key range has overlap in [start_key,end_key]
-    fn key_overlap(&self, start_key: &Key, end_key: &Key) -> &[SSTable] {
-        // let last_key_option = self.last_key();
-        // if last_key_option.is_none() {
-        //     return &[] as &[SSTable];
-        // }
-        // let last_key = last_key_option.unwrap();
-        // if last_key.lt(&start_key) {
-        //     return &[] as &[SSTable];
-        // }
-        // // find first sstable which last key is greater or equal to start_key as first sstable
-        // let start = self.sstables.partition_point(|sstable| sstable.last_key().lt(&start_key));
-        // // find last sstable which last key is greater or equal to end_key as end sstable
-        // if last_key.le(&end_key) {
-        //     return &self.sstables[start..];
-        // }
-        // let end = self.sstables.partition_point(|sstable| sstable.last_key().lt(&end_key));
-        // return &self.sstables[start..end + 1];
-        todo!()
+    fn key_overlap(&self, start_key: &Key, end_key: &Key) -> Vec<SStableFileMeta> {
+        let last_key = self.last_key();
+        if last_key.lt(&start_key) {
+            return Vec::new();
+        }
+        // find first sstable which last key is greater or equal to start_key as first sstable
+        let start = self.sstable_file_metas.partition_point(|sstable_meta| sstable_meta.last_key().lt(&start_key));
+        // find last sstable which last key is greater or equal to end_key as end sstable
+        if last_key.le(&end_key) {
+            return Vec::from(&self.sstable_file_metas[start..]);
+        }
+        let end = self.sstable_file_metas.partition_point(|sstable_meta| sstable_meta.last_key().lt(&end_key));
+        return Vec::from(&self.sstable_file_metas[start..end + 1]);
     }
 
-    fn add_memtable_to_level_0(&self, memtable: Memtable) -> Vec<SStableFileMeta> {
-        todo!()
+    pub fn write_memtable_to_sstable_file(memtable: MemtableReadOnly, file_manager: &mut FileStorageManager) -> Result<Vec<SStableFileMeta>> {
+        let mut iter = memtable.iter();
+        let mut res = Vec::new();
+        loop {
+            let (mut file, file_id, _) = file_manager.new_file()?;
+            let sstable = SSTable::build(&mut iter, file)?;
+            res.push(SStableFileMeta::from(&sstable, file_id));
+            if !iter.has_next() {
+                break;
+            }
+        }
+        Ok(res)
     }
-    // todo compact n-1 level sstable to this level, build new sstable, return all sstable file id after compact, level is unchanged in compact
-    fn compact_sstable<'a>(&'a self, mut input_sstables: Vec<&'a SSTable>) -> Vec<SStableFileMeta> {
-        //     let start_key: &Key = input_sstables.iter().map(|sstable| sstable.start_key()).min().unwrap();
-        //     let end_key: &Key = input_sstables.iter().map(|sstable| sstable.last_key()).max().unwrap();
-        //     // find key overlap sstable
-        //     let sstable_overlap = self.key_overlap(start_key, end_key);
-        //     for sstable in sstable_overlap {
-        //         input_sstables.push(sstable)
-        //     }
-        //
-        //     let mut input_sstables_iter = Vec::new();
-        //     for sstable in input_sstables {
-        //         let iter = sstable.iter()?;
-        //         input_sstables_iter.push(iter)
-        //     }
-        //
-        //     let mut input_sstable_iter_ref: Vec<&mut SStableIter> = input_sstables_iter.iter_mut().collect();
-        //     let mut sstable_iters: Vec<&mut dyn Iterator<Item=(KeySlice, ValueSliceTag)>> = Vec::new();
-        //     input_sstable_iter_ref.reverse();
-        //     while !input_sstable_iter_ref.is_empty() {
-        //         sstable_iters.push(input_sstable_iter_ref.pop().unwrap());
-        //     }
-        //
-        //     // build new sstable, write to stable_writer
-        //     let mut sorted_iter = SortedKVIter::new(sstable_iters);
-        //     let mut res = Vec::new();
-        //     loop {
-        //         let (mut file, file_id) = file_manager.new_file()?;
-        //         let sstable_meta = SSTable::build(&mut sorted_iter, &mut file)?;
-        //         let sstable = FileBaseSSTable::new(sstable_meta, file_id, file_manager.clone());
-        //         res.push(sstable);
-        //         if !sorted_iter.has_next() {
-        //             break;
-        //         }
-        //     }
-        todo!()
+
+    // compact n-1 level sstable to this level, build new sstable, return all sstable file id after compact, level is unchanged in compact
+    fn compact_sstable(&self, mut input_sstables_metas: Vec<SStableFileMeta>) -> Result<Vec<SStableFileMeta>> {
+        let start_key: Key = input_sstables_metas.iter().map(|sstable| sstable.start_key()).min().unwrap();
+        let end_key: Key = input_sstables_metas.iter().map(|sstable| sstable.last_key()).max().unwrap();
+        // find key overlap sstable
+        let mut sstable_overlap = self.key_overlap(&start_key, &end_key);
+        input_sstables_metas.append(&mut sstable_overlap);
+
+        let mut input_sstables = Vec::new();
+        for sstable_file_meta in input_sstables_metas {
+            let sstable_block_metas = self.get_sstable_meta(&sstable_file_meta.file_id())?;
+            let file = FileStorageManager::open_file(self.home_path.as_path(), &sstable_file_meta.file_id())?;
+            let sstable = SSTable::from(sstable_block_metas, file)?;
+            input_sstables.push(sstable);
+        }
+
+        let mut input_sstables_iter = Vec::new();
+        for sstable in &input_sstables {
+            let iter = sstable.iter()?;
+            input_sstables_iter.push(iter)
+        }
+
+        let mut input_sstable_iter_ref: Vec<&mut SStableIter> = input_sstables_iter.iter_mut().collect();
+        let mut sstable_iters: Vec<&mut dyn Iterator<Item=(KeySlice, ValueSliceTag)>> = Vec::new();
+        input_sstable_iter_ref.reverse();
+        while !input_sstable_iter_ref.is_empty() {
+            sstable_iters.push(input_sstable_iter_ref.pop().unwrap());
+        }
+
+        // build new sstable, write to stable_writer
+        let mut sorted_iter = SortedKVIter::new(sstable_iters);
+        let mut res = Vec::new();
+        loop {
+            let (mut file, file_id, _) = self.file_manager.lock().unwrap().new_file()?;
+            let sstable = SSTable::build(&mut sorted_iter, file)?;
+            let meta = SStableFileMeta::from(&sstable, file_id);
+            res.push(meta);
+            if !sorted_iter.has_next() {
+                break;
+            }
+        }
+        Ok(res)
+    }
+
+    pub fn new_cache(capacity: usize) -> ThreadSafeSSTableMetaCache {
+        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(capacity).unwrap())))
     }
 }
 
-impl Iterator for Level {
-    type Item = (KVIterItem);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+impl SStableFileMeta {
+    pub fn new(start_key: Key, end_key: Key, file_id: FileId) -> Self {
+        SStableFileMeta { start_key, last_key: end_key, file_id }
+    }
+    pub fn from(sstable: &SSTable, file_id: FileId) -> Self {
+        let sstable_meta = sstable.block_metadata();
+        Self::new(sstable_meta.first_key(), sstable_meta.last_key(), file_id)
+    }
+    pub fn start_key(&self) -> Key {
+        self.start_key.clone()
+    }
+    pub fn last_key(&self) -> Key {
+        self.last_key.clone()
+    }
+    pub fn file_id(&self) -> FileId {
+        self.file_id
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::cell::RefCell;
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::num::NonZeroUsize;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
 
+    use lru::LruCache;
     use tempfile::tempdir;
 
     use crate::db::file_storage::FileStorageManager;
     use crate::db::key::Key;
-    use crate::db::level::Level;
+    use crate::db::level::{Level, SStableFileMeta};
+    use crate::db::memtable::Memtable;
     use crate::db::sstable::SSTable;
     use crate::db::sstable::test::{build_sstable, build_sstable_with_special_value};
     use crate::db::value::{Value, ValueSlice};
 
     fn build_level() -> Level {
-        // let dir=tempdir().unwrap();
-        // let mut file_manager = FileStorageManager::new(dir.into_path());
-        // let (file, _, _) = file_manager.new_file();
-        // let a = build_sstable(100, 200, 1,file);
-        // // println!("{:?}", a.get(&Key::new("56")).unwrap());
-        // let b = build_sstable(205, 300, 1,file);
-        // let c = build_sstable(305, 400, 1,file);
-        todo!()
-
+        let dir = tempdir().unwrap();
+        let path = dir.into_path();
+        let mut file_manager = FileStorageManager::new(path.clone());
+        let a_file = file_manager.new_file().unwrap().0;
+        let a = build_sstable(100, 200, 1, a_file);
+        let a_meta = SStableFileMeta::new(a.start_key().clone(), a.last_key().clone(), 0);
+        // println!("{:?}", a.get(&Key::new("56")).unwrap());
+        let b_file = file_manager.new_file().unwrap().0;
+        let b = build_sstable(205, 300, 1, b_file);
+        let b_meta = SStableFileMeta::new(b.start_key().clone(), b.last_key().clone(), 1);
+        let c_file = file_manager.new_file().unwrap().0;
+        let c = build_sstable(305, 400, 1, c_file);
+        let c_meta = SStableFileMeta::new(c.start_key().clone(), c.last_key().clone(), 2);
         // [100-200),[205-300),[305-400)
-        // Level::from(vec![a, b, c])
+        Level::new(vec![a_meta, b_meta, c_meta], path, Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(10).unwrap()))), Arc::new(Mutex::new(file_manager)))
     }
 
     #[test]
@@ -180,14 +230,14 @@ mod test {
         let level = build_level();
         let res = level.key_overlap(&Key::new("050"), &Key::new("080"));
         assert_eq!(res.len(), 1);
-        assert_eq!(res.get(0).unwrap().last_key(), &Key::new("199"));
+        assert_eq!(res.get(0).unwrap().last_key(), Key::new("199"));
 
         let res = level.key_overlap(&Key::new("450"), &Key::new("480"));
         assert_eq!(res.len(), 0);
 
         let res = level.key_overlap(&Key::new("120"), &Key::new("280"));
         assert_eq!(res.len(), 2);
-        assert_eq!(res.get(1).unwrap().last_key(), &Key::new("299"));
+        assert_eq!(res.get(1).unwrap().last_key(), Key::new("299"));
 
         let res = level.key_overlap(&Key::new("090"), &Key::new("380"));
         assert_eq!(res.len(), 3);
@@ -204,45 +254,69 @@ mod test {
 
     #[test]
     fn test_compact() {
-        // // a [100,110) delete 109 set 105 to X b[108,115] set 113 to Z set 109 to Z
-        // // c [105,108) ,d [110,115) set 112 to Y, e[122,124)
-        // // sstable create order a>b>c....>e, so priority order is a>b>...e
-        //
-        // let mut special_value_map = HashMap::new();
-        // special_value_map.insert(109, None);
-        // special_value_map.insert(105, Some(Value::new("X")));
-        //
-        // let a = build_sstable_with_special_value(100, 110, 1, special_value_map);
-        //
-        // let mut special_value_map = HashMap::new();
-        // special_value_map.insert(109, Some(Value::new("Z")));
-        // special_value_map.insert(113, Some(Value::new("Z")));
-        // let b = build_sstable_with_special_value(108, 115, 1, special_value_map);
-        //
-        // let c = build_sstable(105, 108, 1);
-        //
-        // let mut special_value_map = HashMap::new();
-        // special_value_map.insert(112, Some(Value::new("Y")));
-        // let d = build_sstable_with_special_value(110, 115, 1, special_value_map);
-        //
-        // let e = build_sstable(122, 124, 1);
-        //
-        // let mut level = Level::from(vec![c, d, e]);
-        // let mut file = tempfile::tempfile().unwrap();
-        //
-        // let dir = tempdir().unwrap();
-        // let mut file_manager = FileStorageManager::new(dir.path());
-        //
-        // let mut file_sstable = level.compact_sstable(vec![&a, &b], &mut file_manager).unwrap();
-        // assert_eq!(file_sstable.len(), 1);
-        // let sstable = file_sstable.pop().unwrap().new_sstable().unwrap();
-        // let expect = "(key: 100,value: 100)(key: 101,value: 101)(key: 102,value: 102)(key: 103,value: 103)(key: 104,value: 104)(key: 105,value: X)(key: 106,value: 106)(key: 107,value: 107)(key: 108,value: 108)(key: 109,value: None)(key: 110,value: 110)(key: 111,value: 111)(key: 112,value: 112)(key: 113,value: Z)(key: 114,value: 114)";
-        // assert_eq!(sstable.to_string(), expect);
+        let dir = tempdir().unwrap();
+        let home_path = PathBuf::from(dir.path());
+        let mut file_manager = FileStorageManager::new_thread_safe_manager(dir.into_path());
+
+        // a [100,110) delete 109 set 105 to X b[108,115] set 113 to Z set 109 to Z
+        // c [105,108) ,d [110,115) set 112 to Y, e[122,124)
+        // sstable create order a>b>c....>e, so priority order is a>b>...e
+        let mut special_value_map = HashMap::new();
+        special_value_map.insert(109, None);
+        special_value_map.insert(105, Some(Value::new("X")));
+
+        let (mut a_file, a_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
+        let a = build_sstable_with_special_value(100, 110, 1, special_value_map, a_file);
+        let a_file_meta = SStableFileMeta::from(&a, a_file_id);
+
+        let mut special_value_map = HashMap::new();
+        special_value_map.insert(109, Some(Value::new("Z")));
+        special_value_map.insert(113, Some(Value::new("Z")));
+        let (mut b_file, b_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
+        let b = build_sstable_with_special_value(108, 115, 1, special_value_map, b_file);
+        let b_file_meta = SStableFileMeta::from(&b, b_file_id);
+
+        let (mut c_file, c_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
+        let c = build_sstable(105, 108, 1, c_file);
+        let c_file_meta = SStableFileMeta::from(&c, c_file_id);
+
+        let mut special_value_map = HashMap::new();
+        special_value_map.insert(112, Some(Value::new("Y")));
+        let (mut d_file, d_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
+        let d = build_sstable_with_special_value(110, 115, 1, special_value_map, d_file);
+        let d_file_meta = SStableFileMeta::from(&d, d_file_id);
+
+        let (mut e_file, e_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
+        let e = build_sstable(122, 124, 1, e_file);
+        let e_file_meta = SStableFileMeta::from(&e, e_file_id);
+
+        let mut level = Level::new(vec![c_file_meta, d_file_meta, e_file_meta], home_path.clone(), Level::new_cache(10), file_manager);
+
+        let mut file_sstable = level.compact_sstable(vec![a_file_meta, b_file_meta]).unwrap();
+        assert_eq!(file_sstable.len(), 1);
+        let file_id = file_sstable.pop().unwrap().file_id;
+        let mut file = FileStorageManager::open_file(&home_path, &file_id).unwrap();
+        let sstable = SSTable::from_file(file).unwrap();
+        let expect = "(key: 100,value: 100)(key: 101,value: 101)(key: 102,value: 102)(key: 103,value: 103)(key: 104,value: 104)(key: 105,value: X)(key: 106,value: 106)(key: 107,value: 107)(key: 108,value: 108)(key: 109,value: None)(key: 110,value: 110)(key: 111,value: 111)(key: 112,value: 112)(key: 113,value: Z)(key: 114,value: 114)";
+        assert_eq!(sstable.to_string(), expect);
     }
 
     #[test]
-    fn test_add_sstable_to_empty_level() {}
+    fn test_write_memtable_to_sstable() {
+        let mut memtable = Memtable::new();
+        for i in 0..10 {
+            memtable.insert(&Key::from(i.to_string().as_bytes()), &Value::new(&i.to_string()));
+        }
+        let dir = tempdir().unwrap();
+        let home_path = dir.path();
+        let mut file_manager = FileStorageManager::new(PathBuf::from(home_path));
+        let memtable_readonly = memtable.to_readonly();
+        let mut sstables = Level::write_memtable_to_sstable_file(memtable_readonly, &mut file_manager).unwrap();
+        assert_eq!(sstables.len(), 1);
+        let meta = sstables.pop().unwrap();
+        let file = FileStorageManager::open_file(home_path, &meta.file_id).unwrap();
+        let sstable = SSTable::from_file(file).unwrap();
 
-    #[test]
-    fn test_add_sstable_to_level_and_compact() {}
+        assert_eq!(format!("{:}", sstable), "(key: 0,value: 0)(key: 1,value: 1)(key: 2,value: 2)(key: 3,value: 3)(key: 4,value: 4)(key: 5,value: 5)(key: 6,value: 6)(key: 7,value: 7)(key: 8,value: 8)(key: 9,value: 9)");
+    }
 }
