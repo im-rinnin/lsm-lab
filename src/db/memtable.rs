@@ -3,9 +3,9 @@ use std::collections::BinaryHeap;
 
 use dashmap::{DashMap, ReadOnlyView};
 
-use crate::db::common::{ ValueWithTag};
-use crate::db::key::Key;
-use crate::db::value::Value;
+use crate::db::common::{KVIterItem, ValueSliceTag, ValueWithTag};
+use crate::db::key::{Key, KeySlice};
+use crate::db::value::{Value, ValueSlice};
 
 pub struct Memtable {
     hash_map: DashMap<Key, ValueWithTag>,
@@ -21,7 +21,7 @@ pub struct MemtableIter<'a>(
 
 impl Memtable {
     pub fn to_readonly(self) -> MemtableReadOnly {
-        MemtableReadOnly{hash_map:self.hash_map.into_read_only()}
+        MemtableReadOnly { hash_map: self.hash_map.into_read_only() }
     }
     pub fn new() -> Self {
         Memtable { hash_map: DashMap::new() }
@@ -48,7 +48,7 @@ impl Memtable {
 }
 
 impl MemtableReadOnly {
-    pub fn to_iter(&self) -> MemtableIter {
+    pub fn iter(&self) -> MemtableIter {
         let mut iter = self.hash_map.iter();
         let mut heap = BinaryHeap::new();
         for i in iter {
@@ -58,14 +58,27 @@ impl MemtableReadOnly {
     }
 }
 
+impl<'a> MemtableIter<'a> {
+    pub fn has_next(&self)->bool{
+        !self.0.is_empty()
+    }
+
+}
 
 impl<'a> Iterator for MemtableIter<'a> {
-    type Item = (&'a Key, &'a ValueWithTag);
+    type Item = KVIterItem;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(reversed_kv)= self.0.pop(){
+        if let Some(reversed_kv) = self.0.pop() {
             let (k, v) = reversed_kv.0;
-            return Some((k, v));
+            let key_slice = KeySlice::new(k.data());
+            let res = if v.is_some() {
+                let a = v.as_ref().unwrap();
+                Option::from(ValueSlice::new(a.data()))
+            } else {
+                None
+            };
+            return Some((key_slice, res));
         }
         None
     }
@@ -73,7 +86,6 @@ impl<'a> Iterator for MemtableIter<'a> {
 
 #[cfg(test)]
 mod test {
-
     use crate::db::key::Key;
     use crate::db::memtable::Memtable;
     use crate::db::value::Value;
@@ -101,10 +113,12 @@ mod test {
         memtable.insert(&Key::new("b"), &Value::new("b"));
 
         let memtable_readonly = memtable.to_readonly();
-        let it = memtable_readonly.to_iter();
+        let mut it = memtable_readonly.iter();
+        assert!(it.has_next());
         let mut s = String::new();
-        for i in it {
-            s.push_str(i.0.to_string())
+        while it.has_next(){
+            let i =it.next().unwrap();
+            s.push_str(&i.0.to_string())
         }
         assert_eq!(s, "abc");
     }
