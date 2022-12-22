@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::io::SeekFrom::Start;
 use std::sync::Arc;
 
@@ -31,24 +31,12 @@ const BLOCK_POOL_MEMORY_SIZE: usize = 2 * KEY_SIZE_LIMIT + BLOCK_SIZE;
 // immutable, own by level
 pub struct SSTable {
     sstable_metas: Arc<SStableBlockMeta>,
-    reader: Box<RefCell<dyn SSTableStorageReader>>,
+    file: RefCell<File>,
 }
 
 #[derive(Debug)]
 pub struct SStableBlockMeta {
     block_metas: Vec<BlockMeta>,
-}
-
-pub trait SStableWriter: Write + Seek {
-    fn as_write(&mut self) -> &mut dyn Write;
-}
-
-pub trait SSTableStorageReader: Read + Seek {
-    fn as_reader(&mut self) -> &mut dyn Read;
-}
-
-struct WriterMetric<W: SStableWriter> {
-    inner: W,
 }
 
 pub struct SStableIter<'a> {
@@ -84,16 +72,6 @@ impl<'a> Iterator for SStableIter<'a> {
     }
 }
 
-impl<W: SStableWriter> Write for WriterMetric<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.inner.write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
-    }
-}
-
 impl SSTable {
     pub const SSTABLE_SIZE_LIMIT: usize = 1024 * 1024 * 4;
     pub fn get_meta_from_file(file: &mut File) -> Result<SStableBlockMeta> {
@@ -109,14 +87,11 @@ impl SSTable {
         }
         Ok(SStableBlockMeta { block_metas: metas })
     }
-    pub fn from_file(sstable_metas: Arc<SStableBlockMeta>, store: File) -> Result<Self> {
-        Self::from(sstable_metas,Box::new(RefCell::new(store)))
-    }
-    pub fn from(sstable_metas: Arc<SStableBlockMeta>, store: Box<RefCell<dyn SSTableStorageReader>>) -> Result<Self> {
-        Ok(SSTable { sstable_metas, reader: store })
+    pub fn from(sstable_metas: Arc<SStableBlockMeta>, file: File) -> Result<Self> {
+        Ok(SSTable { sstable_metas, file: RefCell::new(file) })
     }
 
-    pub fn block_metadata(&self)->Arc<SStableBlockMeta>{
+    pub fn block_metadata(&self) -> Arc<SStableBlockMeta> {
         self.sstable_metas.clone()
     }
 
@@ -148,7 +123,7 @@ impl SSTable {
 
     fn read_block(&self, block_position: usize) -> Result<Block> {
         let block_meta = &self.sstable_metas.block_metas[block_position];
-        let mut read_ref = self.reader.borrow_mut();
+        let mut read_ref = self.file.borrow_mut();
         read_ref.seek(Start(block_meta.block_offset()))?;
         let data_size = block_meta.size();
         assert!(data_size < BLOCK_POOL_MEMORY_SIZE);
@@ -160,12 +135,13 @@ impl SSTable {
     /// build new sstable, may not use out iterator if sstable size reach limit
     /// use BufWriter if possible
     pub fn build(kv_iters: &mut dyn Iterator<Item=KVIterItem>,
-                 sstable_writer: &mut dyn Write) -> Result<SStableBlockMeta> {
+                 mut file: File) -> Result<SSTable> {
         let mut block_builder = BlockBuilder::new();
         let mut entry_count = 0;
         let mut block_metas = Vec::with_capacity(Self::SSTABLE_SIZE_LIMIT / BLOCK_SIZE as usize);
         let mut last_block_position = 0;
         let mut start_key = None;
+        let sstable_writer=&mut file;
 
         let mut next_entry = kv_iters.next();
         loop {
@@ -211,10 +187,7 @@ impl SSTable {
         sstable_writer.write_u64::<LittleEndian>(block_metas.len() as u64)?;
         sstable_writer.write_u64::<LittleEndian>(last_block_position)?;
 
-
-        drop(sstable_writer);
-
-        Ok(SStableBlockMeta { block_metas })
+        Ok(SSTable{sstable_metas:Arc::new(SStableBlockMeta { block_metas }),file:RefCell::new(file)})
     }
 
     pub fn iter(&self) -> Result<SStableIter> {
@@ -247,46 +220,22 @@ impl SStableBlockMeta {
         last_meta.last_key().clone()
     }
 
-    pub fn first_key(&self)->Key{
+    pub fn first_key(&self) -> Key {
         let last_meta = self.block_metas.first().expect("wouldn't be empty");
         last_meta.start_key().clone()
-    }
-}
-
-impl SSTableStorageReader for File {
-    fn as_reader(&mut self) -> &mut dyn Read {
-        self
-    }
-}
-
-impl SStableWriter for File {
-    fn as_write(&mut self) -> &mut dyn Write {
-        self
-    }
-}
-
-impl SSTableStorageReader for Cursor<Vec<u8>> {
-    fn as_reader(&mut self) -> &mut dyn Read {
-        self
-    }
-}
-
-impl SStableWriter for Cursor<Vec<u8>> {
-    fn as_write(&mut self) -> &mut dyn Write {
-        self
     }
 }
 
 #[cfg(test)]
 pub mod test {
     use std::cell::RefCell;
-    use anyhow::Result;
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::{Cursor, Seek, SeekFrom};
     use std::str::from_utf8;
     use std::sync::Arc;
 
+    use anyhow::Result;
     use tempfile::tempdir;
 
     use crate::db::common::{SortedKVIter, ValueWithTag};
@@ -295,52 +244,18 @@ pub mod test {
     use crate::db::sstable::SSTable;
     use crate::db::value::{Value, ValueSlice};
 
-    #[test]
-    fn test_build_sstable() {
-        let mut data = Vec::new();
-        let number = 100;
-        for i in 0..number {
-            data.push((Key::new(&i.to_string()), Value::new(&i.to_string())));
-        }
-        let output: Vec<u8> = vec![0; 20 * number];
-
-        let mut it = data.iter().map(|e| (KeySlice::new(e.0.data()),
-                                          Some(ValueSlice::new(e.1.data()))));
-        let mut c = Cursor::new(output);
-        let sstable_metas = Arc::new(SSTable::build(&mut it, &mut c).unwrap());
-        let sstable = SSTable::from(sstable_metas, Box::new(RefCell::new(c))).unwrap();
-
-        // check sstable
-        for i in 0..number {
-            assert_eq!(sstable.get(&Key::new(&i.to_string())).unwrap().unwrap(), Value::new(&i.to_string()));
-        }
-    }
-
-    pub fn build_sstable_with_special_value(start_number: usize, end_number: usize, step: usize, manual_set_value: HashMap<usize, ValueWithTag>) -> SSTable {
+    pub fn build_sstable_with_special_value(start_number: usize, end_number: usize, step: usize, manual_set_value: HashMap<usize, ValueWithTag>, mut file: File) -> SSTable {
         let (data, output) = create_data(start_number, end_number, step, manual_set_value);
 
         let mut it = data.iter().map(|e| (KeySlice::new(e.0.data()),
                                           e.1.as_ref().map(|f| ValueSlice::new(f.data()))));
-        let mut c = Cursor::new(output);
-        let sstable_metas = Arc::new(SSTable::build(&mut it, &mut c).unwrap());
-        let sstable = SSTable::from(sstable_metas, Box::new(RefCell::new(c))).unwrap();
+        let sstable = SSTable::build(&mut it, file).unwrap();
         sstable
-    }
-    pub fn build_sstable_on_file(start_number: usize, end_number: usize, step: usize,file_manager:&mut FileStorageManager) -> Result<SSTable> {
-        let sstable_in_memory = build_sstable(start_number, end_number, step);
-        clone_sstable_on_file(&sstable_in_memory, file_manager)
-    }
-
-    pub fn clone_sstable_on_file(sstable: &SSTable, file_manager:&mut FileStorageManager) ->Result<SSTable>{
-        let (mut file,_,_) = file_manager.new_file()?;
-        let mut iter=sstable.iter()?;
-        let metas= SSTable::build(&mut iter,&mut file)?;
-        SSTable::from(Arc::new(metas), Box::new(RefCell::new(file)))
     }
 
     // build sstable 1->100
-    pub fn build_sstable(start_number: usize, end_number: usize, step: usize) -> SSTable {
-        build_sstable_with_special_value(start_number, end_number, step, HashMap::new())
+    pub fn build_sstable(start_number: usize, end_number: usize, step: usize, file: File) -> SSTable {
+        build_sstable_with_special_value(start_number, end_number, step, HashMap::new(), file)
     }
 
     fn create_data(start_number: usize, end_number: usize, step: usize, manual_set_value: HashMap<usize, ValueWithTag>) -> (Vec<(Key, ValueWithTag)>, Vec<u8>) {
@@ -357,15 +272,43 @@ pub mod test {
     }
 
     #[test]
+    fn test_build_sstable() {
+        let mut data = Vec::new();
+        let number = 100;
+        for i in 0..number {
+            data.push((Key::new(&i.to_string()), Value::new(&i.to_string())));
+        }
+        let output: Vec<u8> = vec![0; 20 * number];
+
+        let mut it = data.iter().map(|e| (KeySlice::new(e.0.data()),
+                                          Some(ValueSlice::new(e.1.data()))));
+        let mut c = tempfile::tempfile().unwrap();
+        let sstable= SSTable::build(&mut it,c).unwrap();
+
+        // check sstable
+        for i in 0..number {
+            assert_eq!(sstable.get(&Key::new(&i.to_string())).unwrap().unwrap(), Value::new(&i.to_string()));
+        }
+    }
+
+
+
+    #[test]
     fn test_stable_last_key_start_key() {
-        let sstable = build_sstable(100, 200, 1);
+        let dir=tempdir().unwrap();
+        let mut file_manager = FileStorageManager::new(dir.into_path());
+        let (file, _, _) = file_manager.new_file().unwrap();
+        let sstable = build_sstable(100, 200, 1,file);
         assert_eq!(sstable.last_key(), &Key::new("199"));
         assert_eq!(sstable.start_key(), &Key::new("100"));
     }
 
     #[test]
     fn test_stable_iter() {
-        let sstable = build_sstable(0, 100, 1);
+        let dir=tempdir().unwrap();
+        let mut file_manager = FileStorageManager::new(dir.into_path());
+        let (file, _, _) = file_manager.new_file().unwrap();
+        let sstable = build_sstable(0, 100, 1,file);
         let iter = sstable.iter().unwrap();
         for (i, kv) in iter.enumerate() {
             unsafe {
@@ -377,19 +320,19 @@ pub mod test {
 
     #[test]
     fn test_build_sstable_on_file() {
-        let sstable_1 = build_sstable(1, 10, 2);
+        let dir=tempdir().unwrap();
+        let mut file_manager = FileStorageManager::new(dir.into_path());
+        let (file_1, file_1_id, _) = file_manager.new_file().unwrap();
+        let sstable_1 = build_sstable(1, 10, 2, file_1);
         let mut sstable_1_iter = sstable_1.iter().unwrap();
 
-        let sstable_2 = build_sstable(0, 10, 2);
-        let dir = tempdir().unwrap();
-        let mut file_manager = FileStorageManager::new(dir.into_path());
-        let sstable_2_on_file = clone_sstable_on_file(&sstable_2, &mut file_manager).unwrap();
-        let mut sstable_2_on_file_iter = sstable_2_on_file.iter().unwrap();
+        let (file_2, file_2_id, _) = file_manager.new_file().unwrap();
+        let sstable_2 = build_sstable(0, 10, 2, file_2);
+        let mut sstable_2_iter = sstable_2.iter().unwrap();
 
-        let mut sorted_kv_iter = SortedKVIter::new(vec![&mut sstable_1_iter, &mut sstable_2_on_file_iter]);
+        let mut sorted_kv_iter = SortedKVIter::new(vec![&mut sstable_1_iter, &mut sstable_2_iter]);
         let mut sstable_3_file = tempfile::tempfile().unwrap();
-        let sstable_3_meta = Arc::new(SSTable::build(&mut sorted_kv_iter, &mut sstable_3_file).unwrap());
-        let sstable_3 = SSTable::from(sstable_3_meta, Box::new(RefCell::new(sstable_3_file))).unwrap();
+        let sstable_3= SSTable::build(&mut sorted_kv_iter, sstable_3_file).unwrap();
         let sstable_3_on_file_iter = sstable_3.iter().unwrap();
         for (i, data) in sstable_3_on_file_iter.enumerate() {
             unsafe {
@@ -400,44 +343,40 @@ pub mod test {
 
     #[test]
     fn test_sstable_display() {
-        let sstable = build_sstable(1, 5, 1);
+        let dir=tempdir().unwrap();
+        let mut file_manager = FileStorageManager::new(dir.into_path());
+        let (file, _, _) = file_manager.new_file().unwrap();
+        let sstable = build_sstable(1, 5, 1,file);
         assert_eq!(sstable.to_string(), "(key: 1,value: 1)(key: 2,value: 2)(key: 3,value: 3)(key: 4,value: 4)");
     }
 
     #[test]
-    fn test_file_sstable() {
-        let dir = tempdir().unwrap();
-        let mut file_manager = FileStorageManager::new(dir.into_path());
-        let (mut file, _, path) = file_manager.new_file().unwrap();
-
-        let sstable = build_sstable(1, 10, 1);
-        let mut iter = sstable.iter().unwrap();
-        let sstable_2_meta = SSTable::build(&mut iter, &mut file).unwrap();
-
-        let sstable_2 = SSTable::from(Arc::new(sstable_2_meta), Box::new(RefCell::new(File::open(path.as_path()).unwrap()))).unwrap();
-
-        assert_eq!(sstable.to_string(), sstable_2.to_string());
-    }
-
-    #[test]
     fn test_get_sstable_meta() {
-        let sstable_1 = build_sstable(1, 10, 2);
+        let dir=tempdir().unwrap();
+        let mut file_manager = FileStorageManager::new(dir.into_path());
+        let (file, _, _) = file_manager.new_file().unwrap();
+        let sstable_1 = build_sstable(1, 10, 2,file);
         let mut iter_1 = sstable_1.iter().unwrap();
 
 
         let dir = tempdir().unwrap();
-        let mut file_manager = FileStorageManager::new(dir.into_path());
-        let mut sstable_2_file = file_manager.new_file().unwrap().0;
-        let sstable_2_meta = Arc::new(SSTable::build(&mut iter_1, &mut sstable_2_file).unwrap());
+        let path=dir.into_path();
+        let mut file_manager = FileStorageManager::new(path.clone());
+        let (mut sstable_2_file,id,_) = file_manager.new_file().unwrap();
+        let sstable_2= SSTable::build(&mut iter_1, sstable_2_file).unwrap();
+        let sstable_2_meta=sstable_2.block_metadata();
 
-        sstable_2_file.seek(SeekFrom::Start(0)).unwrap();
-        let meta = SSTable::get_meta_from_file(&mut sstable_2_file).unwrap();
-        assert_eq!(format!("{:?}", meta), format!("{:?}", sstable_2_meta))
+        let mut file = FileStorageManager::open_file(path.as_path(), &id).unwrap();
+        let meta = SSTable::get_meta_from_file(&mut file).unwrap();
+        assert_eq!(format!("{:?}", meta), format!("{:?}", *sstable_2_meta))
     }
 
     #[test]
     fn test_stable_meta_last_key() {
-        let sstable_1 = build_sstable(1, 10, 2);
+        let dir=tempdir().unwrap();
+        let mut file_manager = FileStorageManager::new(dir.into_path());
+        let (file, _, _) = file_manager.new_file().unwrap();
+        let sstable_1 = build_sstable(1, 10, 2,file);
         assert_eq!(sstable_1.sstable_metas.last_key(), Key::new("9"));
         assert_eq!(sstable_1.sstable_metas.first_key(), Key::new("1"));
     }

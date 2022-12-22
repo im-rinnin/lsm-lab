@@ -152,10 +152,13 @@ mod test {
     use crate::db::value::{Value, ValueSlice};
 
     fn build_level() -> Level {
-        let a = build_sstable(100, 200, 1);
-        // println!("{:?}", a.get(&Key::new("56")).unwrap());
-        let b = build_sstable(205, 300, 1);
-        let c = build_sstable(305, 400, 1);
+        // let dir=tempdir().unwrap();
+        // let mut file_manager = FileStorageManager::new(dir.into_path());
+        // let (file, _, _) = file_manager.new_file();
+        // let a = build_sstable(100, 200, 1,file);
+        // // println!("{:?}", a.get(&Key::new("56")).unwrap());
+        // let b = build_sstable(205, 300, 1,file);
+        // let c = build_sstable(305, 400, 1,file);
         todo!()
 
         // [100-200),[205-300),[305-400)
