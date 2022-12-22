@@ -87,6 +87,10 @@ impl SSTable {
         }
         Ok(SStableBlockMeta { block_metas: metas })
     }
+    pub fn from_file(mut file: File) -> Result<Self> {
+        let sstable_metas = SSTable::get_meta_from_file(&mut file)?;
+        Ok(SSTable { sstable_metas:Arc::new(sstable_metas), file: RefCell::new(file) })
+    }
     pub fn from(sstable_metas: Arc<SStableBlockMeta>, file: File) -> Result<Self> {
         Ok(SSTable { sstable_metas, file: RefCell::new(file) })
     }
