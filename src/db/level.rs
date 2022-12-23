@@ -119,7 +119,9 @@ impl Level {
     }
 
     // compact n-1 level sstable to this level, build new sstable, return all sstable file id after compact, level is unchanged in compact
-    fn compact_sstable(&self, mut input_sstables_metas: Vec<SStableFileMeta>) -> Result<Vec<SStableFileMeta>> {
+    // todo handle empty level
+    // todo return all sstable file meta
+    pub fn compact_sstable(&self, mut input_sstables_metas: Vec<SStableFileMeta>) -> Result<Vec<SStableFileMeta>> {
         let start_key: Key = input_sstables_metas.iter().map(|sstable| sstable.start_key()).min().unwrap();
         let end_key: Key = input_sstables_metas.iter().map(|sstable| sstable.last_key()).max().unwrap();
         // find key overlap sstable
