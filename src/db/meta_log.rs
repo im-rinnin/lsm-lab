@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-
 pub struct MetaLog {
     file: File,
 }
@@ -35,14 +34,14 @@ impl Iterator for MetaLogIter {
 
 
 impl MetaLog {
-    pub fn new( file: File) -> Self {
+    pub fn new(file: File) -> Self {
         MetaLog { file }
     }
 
-    pub fn add_data(&mut self, data: &Vec<u8>) -> Result<()> {
+    pub fn add_data(&mut self, data: &[u8]) -> Result<()> {
         let len = data.len();
         self.file.write_u64::<LittleEndian>(len as u64)?;
-        self.file.write(data.as_slice())?;
+        self.file.write(data)?;
         self.file.sync_all()?;
         Ok(())
     }
@@ -50,7 +49,7 @@ impl MetaLog {
     // for db start
     pub fn to_iter(file: File) -> Result<MetaLogIter> {
         let len = file.metadata()?.len();
-        Ok(MetaLogIter { file, remain_data_len: len as usize})
+        Ok(MetaLogIter { file, remain_data_len: len as usize })
     }
 }
 
@@ -67,10 +66,10 @@ mod test {
         let mut file_manager = FileStorageManager::new(path.clone());
         let (mut file, id, _) = file_manager.new_file().unwrap();
         let mut meta_log = MetaLog::new(file);
-        let data_a: Vec<u8> = vec![1,2,4];
-        let data_b: Vec<u8> = vec![2,5,2];
-        meta_log.add_data(&data_a).unwrap();
-        meta_log.add_data(&data_b).unwrap();
+        let data_a: Vec<u8> = vec![1, 2, 4];
+        let data_b: Vec<u8> = vec![2, 5, 2];
+        meta_log.add_data(data_a.as_slice()).unwrap();
+        meta_log.add_data(data_b.as_slice()).unwrap();
 
         let mut iter = MetaLog::to_iter(FileStorageManager::open_file(&path, &id).unwrap()).unwrap();
         let data = iter.next().unwrap().unwrap();
