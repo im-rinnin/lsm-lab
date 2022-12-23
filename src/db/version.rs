@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::db::file_storage::{FileId, FileStorageManager};
 use crate::db::key::Key;
-use crate::db::level::{Level, SStableFileMeta};
+use crate::db::level::{Level, LevelChange, SStableFileMeta};
 use crate::db::memtable::Memtable;
 use crate::db::meta_log::MetaLog;
 use crate::db::value::Value;
@@ -42,13 +42,26 @@ impl Version {
         todo!()
     }
 
+    pub fn from_level_change(&self, level_change: &LevelChange) -> Self {
+        todo!()
+    }
+
+
     // for sstable file prune
     pub fn all_file_id(&self) -> Vec<FileId> {
         todo!()
     }
 
-    pub fn get_level_file_meta(&self,level:usize)->Vec<SStableFileMeta>{
+    pub fn get_level_file_meta(&self, level: usize) -> Vec<SStableFileMeta> {
         todo!()
+    }
+
+    pub fn get_level(&self, level: usize) -> Option<&Level> {
+        self.levels.get(level)
+    }
+
+    pub fn depth(&self) -> usize {
+        self.levels.len()
     }
 }
 
