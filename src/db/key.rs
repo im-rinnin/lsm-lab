@@ -2,7 +2,8 @@ use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 use std::slice::from_raw_parts;
 
-#[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Debug, Hash)]
+use serde::{Deserialize,Serialize};
+#[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Debug, Hash,Deserialize,Serialize)]
 pub struct Key {
     k: String,
 }

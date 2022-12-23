@@ -16,8 +16,8 @@ use crate::db::memtable::{Memtable, MemtableReadOnly};
 use crate::db::sstable::{SSTable, SStableBlockMeta, SStableIter};
 use crate::db::value::{Value, ValueSlice};
 
-type SSTableBlockMetaCache = LruCache<FileId, Arc<SStableBlockMeta>>;
-type ThreadSafeSSTableMetaCache = Arc<Mutex<SSTableBlockMetaCache>>;
+pub type SSTableBlockMetaCache = LruCache<FileId, Arc<SStableBlockMeta>>;
+pub type ThreadSafeSSTableMetaCache = Arc<Mutex<SSTableBlockMetaCache>>;
 
 // immutable, own by version
 pub struct Level {
@@ -27,13 +27,15 @@ pub struct Level {
     home_path: PathBuf,
 }
 
-enum LevelChange {
+use serde::{Serialize,Deserialize};
+#[derive(Clone,Debug,Deserialize,Serialize)]
+pub enum LevelChange {
     // add new sstable to level start from position_in_level,sstable order is same as sstable_file_metas
     ADD { level: usize, sstable_file_metas: Vec<SStableFileMeta>, position_in_level: usize },
     DELETE { level: usize, sstable_file_meta: Vec<FileId> },
 }
 
-#[derive(Clone)]
+#[derive(Clone,Deserialize,Serialize,Debug)]
 pub struct SStableFileMeta {
     file_id: FileId,
     start_key: Key,
