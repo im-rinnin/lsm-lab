@@ -46,6 +46,10 @@ impl Version {
     pub fn all_file_id(&self) -> Vec<FileId> {
         todo!()
     }
+
+    pub fn get_level_file_meta(&self,level:usize)->Vec<SStableFileMeta>{
+        todo!()
+    }
 }
 
 #[cfg(test)]

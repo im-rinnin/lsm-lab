@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::io::SeekFrom::Start;
+use serde::{Serialize,Deserialize};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -34,7 +35,7 @@ pub struct SSTable {
     file: RefCell<File>,
 }
 
-#[derive(Debug)]
+#[derive(Debug,Serialize,Deserialize)]
 pub struct SStableBlockMeta {
     block_metas: Vec<BlockMeta>,
 }

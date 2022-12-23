@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use lru::LruCache;
+use serde::{Deserialize, Serialize};
 
 use crate::db::common::{KVIterItem, SortedKVIter, ValueSliceTag};
 use crate::db::file_storage::{FileId, FileStorageManager, ThreadSafeFileManager};
@@ -27,15 +28,19 @@ pub struct Level {
     home_path: PathBuf,
 }
 
-use serde::{Serialize,Deserialize};
-#[derive(Clone,Debug,Deserialize,Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum LevelChange {
     // add new sstable to level start from position_in_level,sstable order is same as sstable_file_metas
-    ADD { level: usize, sstable_file_metas: Vec<SStableFileMeta>, position_in_level: usize },
-    DELETE { level: usize, sstable_file_meta: Vec<FileId> },
+    MEMTABLE_COMPACT { sstable_file_metas: Vec<SStableFileMeta> },
+    LEVEL_COMPACT {
+        // compact 1 to 2, compact_from_leve is 1
+        compact_from_level: usize,
+        remove_sstable_file_ids: Vec<FileId>,
+        add_sstable_file_metas: Vec<SStableFileMeta>,
+    },
 }
 
-#[derive(Clone,Deserialize,Serialize,Debug)]
+#[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct SStableFileMeta {
     file_id: FileId,
     start_key: Key,
@@ -99,7 +104,7 @@ impl Level {
         return Vec::from(&self.sstable_file_metas[start..end + 1]);
     }
 
-    pub fn write_memtable_to_sstable_file(memtable: MemtableReadOnly, file_manager: &mut FileStorageManager) -> Result<Vec<SStableFileMeta>> {
+    pub fn write_memtable_to_sstable_file(memtable: &MemtableReadOnly, file_manager: &mut FileStorageManager) -> Result<Vec<SStableFileMeta>> {
         let mut iter = memtable.iter();
         let mut res = Vec::new();
         loop {
@@ -313,7 +318,7 @@ mod test {
         let home_path = dir.path();
         let mut file_manager = FileStorageManager::new(PathBuf::from(home_path));
         let memtable_readonly = memtable.to_readonly();
-        let mut sstables = Level::write_memtable_to_sstable_file(memtable_readonly, &mut file_manager).unwrap();
+        let mut sstables = Level::write_memtable_to_sstable_file(&memtable_readonly, &mut file_manager).unwrap();
         assert_eq!(sstables.len(), 1);
         let meta = sstables.pop().unwrap();
         let file = FileStorageManager::open_file(home_path, &meta.file_id).unwrap();

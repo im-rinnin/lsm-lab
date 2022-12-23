@@ -1,5 +1,6 @@
 use std::fmt::{Display, Formatter};
 use std::io::{Read, Write};
+use serde::{Deserialize,Serialize};
 
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -29,7 +30,7 @@ pub struct BlockBuilder {
 }
 
 /// [last_key offset, block_size u16,entry_number u16]
-#[derive(Debug)]
+#[derive(Debug,Serialize,Deserialize)]
 pub struct BlockMeta {
     start_key: Key,
     last_key: Key,
