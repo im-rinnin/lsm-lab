@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::common::{KVIterItem, SortedKVIter, ValueSliceTag};
 use crate::db::file_storage::{FileId, FileStorageManager, ThreadSafeFileManager};
 use crate::db::key::{Key, KeySlice};
-use crate::db::memtable::{Memtable, MemtableReadOnly};
+use crate::db::memtable::{Memtable};
 use crate::db::sstable::{SSTable, SStableBlockMeta, SStableIter};
 use crate::db::value::{Value, ValueSlice};
 
@@ -104,7 +104,7 @@ impl Level {
         return Vec::from(&self.sstable_file_metas[start..end + 1]);
     }
 
-    pub fn write_memtable_to_sstable_file(memtable: &MemtableReadOnly, file_manager: &mut FileStorageManager) -> Result<Vec<SStableFileMeta>> {
+    pub fn write_memtable_to_sstable_file(memtable: &Memtable, file_manager: &mut FileStorageManager) -> Result<Vec<SStableFileMeta>> {
         let mut iter = memtable.iter();
         let mut res = Vec::new();
         loop {
@@ -319,8 +319,7 @@ mod test {
         let dir = tempdir().unwrap();
         let home_path = dir.path();
         let mut file_manager = FileStorageManager::new(PathBuf::from(home_path));
-        let memtable_readonly = memtable.to_readonly();
-        let mut sstables = Level::write_memtable_to_sstable_file(&memtable_readonly, &mut file_manager).unwrap();
+        let mut sstables = Level::write_memtable_to_sstable_file(&memtable, &mut file_manager).unwrap();
         assert_eq!(sstables.len(), 1);
         let meta = sstables.pop().unwrap();
         let file = FileStorageManager::open_file(home_path, &meta.file_id).unwrap();

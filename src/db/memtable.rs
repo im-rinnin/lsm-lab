@@ -11,23 +11,32 @@ pub struct Memtable {
     hash_map: DashMap<Key, ValueWithTag>,
 }
 
-pub struct MemtableReadOnly {
-    hash_map: ReadOnlyView<Key, ValueWithTag>,
-}
+// pub struct MemtableReadOnly {
+//     hash_map: DashMap<Key, ValueWithTag>,
+// }
 
-pub struct MemtableIter<'a>(
-    BinaryHeap<Reverse<(&'a Key, &'a ValueWithTag)>>
+pub struct MemtableIter(
+    BinaryHeap<Reverse<( Key,  ValueWithTag)>>
 );
 
 impl Memtable {
-    pub fn to_readonly(self) -> MemtableReadOnly {
-        MemtableReadOnly { hash_map: self.hash_map.into_read_only() }
-    }
     pub fn new() -> Self {
         Memtable { hash_map: DashMap::new() }
     }
 
-    pub fn insert(&mut self, key: &Key, value: &Value) {
+    pub fn iter(&self) -> MemtableIter {
+        let mut iter = self.hash_map.iter();
+        let mut heap = BinaryHeap::new();
+        for i in iter {
+            let a =i.pair();
+            let k=a.0;
+            let v=a.1;
+            heap.push(Reverse((k.clone(), v.clone())));
+        }
+        MemtableIter(heap)
+    }
+
+    pub fn insert(&self, key: &Key, value: &Value) {
         self.hash_map.insert(key.clone(), Some(value.clone()));
     }
     pub fn get<>(&self, key: &Key) -> Option<Value> {
@@ -47,25 +56,13 @@ impl Memtable {
     }
 }
 
-impl MemtableReadOnly {
-    pub fn iter(&self) -> MemtableIter {
-        let mut iter = self.hash_map.iter();
-        let mut heap = BinaryHeap::new();
-        for i in iter {
-            heap.push(Reverse((i.0, i.1)));
-        }
-        MemtableIter(heap)
-    }
-}
-
-impl<'a> MemtableIter<'a> {
-    pub fn has_next(&self)->bool{
+impl MemtableIter {
+    pub fn has_next(&self) -> bool {
         !self.0.is_empty()
     }
-
 }
 
-impl<'a> Iterator for MemtableIter<'a> {
+impl Iterator for MemtableIter {
     type Item = KVIterItem;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -112,12 +109,11 @@ mod test {
         memtable.insert(&Key::new("c"), &Value::new("c"));
         memtable.insert(&Key::new("b"), &Value::new("b"));
 
-        let memtable_readonly = memtable.to_readonly();
-        let mut it = memtable_readonly.iter();
+        let mut it = memtable.iter();
         assert!(it.has_next());
         let mut s = String::new();
-        while it.has_next(){
-            let i =it.next().unwrap();
+        while it.has_next() {
+            let i = it.next().unwrap();
             s.push_str(&i.0.to_string())
         }
         assert_eq!(s, "abc");
