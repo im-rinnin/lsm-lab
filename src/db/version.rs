@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::sync::{Arc, Mutex};
 
@@ -12,7 +13,7 @@ use crate::db::value::Value;
 // immutable, thread safe,create new version after insert new sstable/compact
 pub struct Version {
     // all level info,order by level number,vec[0]->level 0
-    levels: Vec<Level>,
+    levels: HashMap<usize,Level>,
     file_manager: FileStorageManager,
 }
 
@@ -57,7 +58,7 @@ impl Version {
     }
 
     pub fn get_level(&self, level: usize) -> Option<&Level> {
-        self.levels.get(level)
+        self.levels.get(&level)
     }
 
     pub fn depth(&self) -> usize {
