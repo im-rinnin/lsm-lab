@@ -55,6 +55,7 @@ impl Memtable {
     }
     pub fn delete(&mut self, key: &Key) -> Option<Value> {
         let res = self.hash_map.insert(key.clone(), None);
+        *self.size.get_mut() += key.len();
         if let Some(i) = res {
             return i;
         }
@@ -101,8 +102,11 @@ mod test {
         assert_eq!(memtable.get(&Key::new("a")).unwrap(), Value::new("a"));
         assert_eq!(memtable.get(&Key::new("b")).unwrap(), Value::new("b"));
         memtable.insert(&Key::new("a"), &Value::new("aa"));
+        // size add 3
         assert_eq!(memtable.get(&Key::new("a")).unwrap(), Value::new("aa"));
+        // size add 1
         assert_eq!(memtable.delete(&Key::new("c")).unwrap(), Value::new("c"));
+        assert_eq!(memtable.size(), 10);
         assert!(memtable.get(&Key::new("c")).is_none());
     }
 
