@@ -11,12 +11,8 @@ pub struct Memtable {
     hash_map: DashMap<Key, ValueWithTag>,
 }
 
-// pub struct MemtableReadOnly {
-//     hash_map: DashMap<Key, ValueWithTag>,
-// }
-
 pub struct MemtableIter(
-    BinaryHeap<Reverse<( Key,  ValueWithTag)>>
+    BinaryHeap<Reverse<(KeySlice, ValueSliceTag)>>
 );
 
 impl Memtable {
@@ -28,10 +24,14 @@ impl Memtable {
         let mut iter = self.hash_map.iter();
         let mut heap = BinaryHeap::new();
         for i in iter {
-            let a =i.pair();
-            let k=a.0;
-            let v=a.1;
-            heap.push(Reverse((k.clone(), v.clone())));
+            let p: (&Key, &ValueWithTag) = i.pair();
+            let k = KeySlice::new(p.0.data());
+            let v = if let Some(n) = p.1 {
+                Some(ValueSlice::new(n.data()))
+            } else {
+                None
+            };
+            heap.push(Reverse((k, v)));
         }
         MemtableIter(heap)
     }
@@ -68,14 +68,7 @@ impl Iterator for MemtableIter {
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(reversed_kv) = self.0.pop() {
             let (k, v) = reversed_kv.0;
-            let key_slice = KeySlice::new(k.data());
-            let res = if v.is_some() {
-                let a = v.as_ref().unwrap();
-                Option::from(ValueSlice::new(a.data()))
-            } else {
-                None
-            };
-            return Some((key_slice, res));
+            return Some((k, v));
         }
         None
     }
