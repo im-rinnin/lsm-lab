@@ -16,7 +16,6 @@ use value::Value;
 
 use crate::db::file_storage::{FileId, ThreadSafeFileManager};
 use crate::db::level::{Level, LevelChange, SStableFileMeta};
-use crate::db::memtable::MemtableReadOnly;
 use crate::db::memtable_log::MemtableLog;
 use crate::db::meta_log::MetaLog;
 use crate::db::sstable::SSTable;
@@ -39,8 +38,8 @@ type ThreadSafeVersion = Arc<RwLock<Arc<Version>>>;
 // todo thread safe design multiple thread access
 pub struct DBServer {
     path: String,
-    current_memtable_ref: Arc<RwLock<Rc<Memtable>>>,
-    immutable_memtable_ref: Arc<RwLock<Option<Rc<MemtableReadOnly>>>>,
+    current_memtable_ref: Arc<RwLock<Arc<Memtable>>>,
+    immutable_memtable_ref: Arc<RwLock<Option<Arc<Memtable>>>>,
     versions: ThreadSafeVersion,
     meta_log: MetaLog,
     file_manager: ThreadSafeFileManager,
@@ -151,7 +150,7 @@ impl DBServer {
         let memtable = self.immutable_memtable_ref.read().unwrap();
         let a = memtable.as_deref();
         let d = a.expect("should have immutable memtable");
-        let c: &MemtableReadOnly = d.borrow();
+        let c: &Memtable = d.borrow();
         let mut m = self.file_manager.lock().expect("fail to get file manager lock");
         let h = m.borrow_mut();
         let sstable_file_metas = Level::write_memtable_to_sstable_file(c, h)?;
@@ -183,6 +182,31 @@ impl DBServer {
     fn pick_file_to_compact(level_metas: Vec<SStableFileMeta>) -> Option<Vec<SStableFileMeta>> {
         todo!()
     }
+
+    fn get_current_memtable(&self) -> Arc<Memtable> {
+        let memtable = self.current_memtable_ref.read().unwrap();
+        let res = memtable.clone();
+        res
+    }
+
+    fn move_current_memtable_to_immutable(&mut self) {
+        let mut memtable = self.current_memtable_ref.write().unwrap();
+        let mut immutable_memtable = self.immutable_memtable_ref.write().unwrap();
+        assert!(immutable_memtable.is_none());
+        *immutable_memtable = Some(memtable.clone());
+        *memtable = Arc::new(Memtable::new());
+    }
+
+    fn get_immutable_memtable(&self) ->Option<Arc<Memtable>>{
+        let res = self.immutable_memtable_ref.read().unwrap();
+        res.clone()
+    }
+
+    fn remove_immutable_memtable(&mut self){
+        let mut memtable = self.immutable_memtable_ref.write().unwrap();
+        *memtable = None;
+    }
+
 
     // start routine in new() and from()
     fn init_routines(&self) {
