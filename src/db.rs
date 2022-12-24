@@ -173,7 +173,7 @@ impl DBServer {
                     // @continue
                     //     return
                 } else {
-                    return Ok(Some(LevelChange::LEVEL_COMPACT { compact_from_level: i, remove_sstable_file_ids: Vec::new(), add_sstable_file_metas: picked_sstable }));
+                    // return Ok(Some(LevelChange::LEVEL_COMPACT { compact_from_level: i, remove_sstable_file_ids: Vec::new(), add_sstable_file_metas: picked_sstable }));
                 }
             }
         }

@@ -37,6 +37,7 @@ pub enum LevelChange {
         compact_from_level: usize,
         remove_sstable_file_ids: Vec<FileId>,
         add_sstable_file_metas: Vec<SStableFileMeta>,
+        add_position:usize
     },
 }
 
@@ -69,6 +70,11 @@ impl Level {
         let file = File::open(FileStorageManager::file_path(self.home_path.as_path(), &file_id))?;
         let sstable = SSTable::from(sstable_file_meta, file)?;
         sstable.get(key)
+    }
+
+    // todo use reference
+    pub fn get_all_file_metas(&self)->Vec<SStableFileMeta> {
+        self.sstable_file_metas.clone()
     }
 
     fn get_sstable_meta(&self, file_id: &FileId) -> Result<Arc<SStableBlockMeta>> {
