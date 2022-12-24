@@ -1,5 +1,8 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::hash::Hash;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use dashmap::{DashMap, ReadOnlyView};
 
@@ -9,6 +12,7 @@ use crate::db::value::{Value, ValueSlice};
 
 pub struct Memtable {
     hash_map: DashMap<Key, ValueWithTag>,
+    size: AtomicUsize,
 }
 
 pub struct MemtableIter(
@@ -17,7 +21,7 @@ pub struct MemtableIter(
 
 impl Memtable {
     pub fn new() -> Self {
-        Memtable { hash_map: DashMap::new() }
+        Memtable { hash_map: DashMap::new(), size: AtomicUsize::new(0) }
     }
 
     pub fn iter(&self) -> MemtableIter {
@@ -36,8 +40,10 @@ impl Memtable {
         MemtableIter(heap)
     }
 
-    pub fn insert(&self, key: &Key, value: &Value) {
+    pub fn insert(&mut self, key: &Key, value: &Value) {
+        let size = key.len() + value.len();
         self.hash_map.insert(key.clone(), Some(value.clone()));
+        *self.size.get_mut() += size;
     }
     pub fn get<>(&self, key: &Key) -> Option<Value> {
         if let Some(i) = self.hash_map.get(key) {
@@ -53,6 +59,9 @@ impl Memtable {
             return i;
         }
         None
+    }
+    pub fn size(&self) -> usize {
+        self.size.load(Ordering::SeqCst)
     }
 }
 
@@ -86,6 +95,8 @@ mod test {
         memtable.insert(&Key::new("a"), &Value::new("a"));
         memtable.insert(&Key::new("b"), &Value::new("b"));
         memtable.insert(&Key::new("c"), &Value::new("c"));
+
+        assert_eq!(memtable.size(), 6);
 
         assert_eq!(memtable.get(&Key::new("a")).unwrap(), Value::new("a"));
         assert_eq!(memtable.get(&Key::new("b")).unwrap(), Value::new("b"));
