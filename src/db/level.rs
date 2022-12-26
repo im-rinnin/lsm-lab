@@ -167,6 +167,10 @@ impl Level {
     pub fn new_cache(capacity: usize) -> ThreadSafeSSTableMetaCache {
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(capacity).unwrap())))
     }
+
+    pub fn len(&self) -> usize {
+        self.sstable_file_metas.len()
+    }
 }
 
 impl SStableFileMeta {

@@ -61,6 +61,15 @@ impl Version {
         self.levels.get(&level)
     }
 
+    pub fn get_level_length(&self, level: usize) -> usize {
+        let res = self.levels.get(&level);
+        if let Some(l) = res {
+            l.len()
+        } else {
+            0
+        }
+    }
+
     pub fn depth(&self) -> usize {
         self.levels.len()
     }
