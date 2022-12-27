@@ -190,6 +190,10 @@ impl Level {
         Ok(res)
     }
 
+    pub fn copy_sstable_meta(&self)->Vec<SStableFileMeta>{
+        self.sstable_file_metas.clone()
+    }
+
     pub fn new_cache(capacity: usize) -> ThreadSafeSSTableMetaCache {
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(capacity).unwrap())))
     }
@@ -239,7 +243,7 @@ mod test {
     fn build_level() -> Level {
         let dir = tempdir().unwrap();
         let path = dir.into_path();
-        let mut file_manager = FileStorageManager::new(path.clone());
+        let mut file_manager = FileStorageManager::new(&path);
         let a_file = file_manager.new_file().unwrap().0;
         let a = build_sstable(100, 200, 1, a_file);
         let a_meta = SStableFileMeta::new(a.start_key().clone(), a.last_key().clone(), 0);
@@ -260,7 +264,7 @@ mod test {
         // set 16 to "a" in a
         let dir = tempdir().unwrap();
         let path = dir.into_path();
-        let mut file_manager = FileStorageManager::new(path.clone());
+        let mut file_manager = FileStorageManager::new(&path);
         let a_file = file_manager.new_file().unwrap().0;
         let mut map = HashMap::new();
 
@@ -385,7 +389,7 @@ mod test {
         }
         let dir = tempdir().unwrap();
         let home_path = dir.path();
-        let mut file_manager = FileStorageManager::new(PathBuf::from(home_path));
+        let mut file_manager = FileStorageManager::new(home_path);
         let mut sstables = Level::write_memtable_to_sstable_file(&memtable, &mut file_manager).unwrap();
         assert_eq!(sstables.len(), 1);
         let meta = sstables.pop().unwrap();

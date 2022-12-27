@@ -302,7 +302,7 @@ pub mod test {
     #[test]
     fn test_stable_last_key_start_key() {
         let dir = tempdir().unwrap();
-        let mut file_manager = FileStorageManager::new(dir.into_path());
+        let mut file_manager = FileStorageManager::new(dir.path());
         let (file, _, _) = file_manager.new_file().unwrap();
         let sstable = build_sstable(100, 200, 1, file);
         assert_eq!(sstable.last_key(), &Key::new("199"));
@@ -312,7 +312,7 @@ pub mod test {
     #[test]
     fn test_stable_iter() {
         let dir = tempdir().unwrap();
-        let mut file_manager = FileStorageManager::new(dir.into_path());
+        let mut file_manager = FileStorageManager::new(dir.path());
         let (file, _, _) = file_manager.new_file().unwrap();
         let sstable = build_sstable(0, 100, 1, file);
         let iter = sstable.iter().unwrap();
@@ -327,7 +327,7 @@ pub mod test {
     #[test]
     fn test_build_sstable_on_file() {
         let dir = tempdir().unwrap();
-        let mut file_manager = FileStorageManager::new(dir.into_path());
+        let mut file_manager = FileStorageManager::new(dir.path());
         let (file_1, file_1_id, _) = file_manager.new_file().unwrap();
         let sstable_1 = build_sstable(1, 10, 2, file_1);
         let mut sstable_1_iter = sstable_1.iter().unwrap();
@@ -350,7 +350,7 @@ pub mod test {
     #[test]
     fn test_sstable_display() {
         let dir = tempdir().unwrap();
-        let mut file_manager = FileStorageManager::new(dir.into_path());
+        let mut file_manager = FileStorageManager::new(dir.path());
         let (file, _, _) = file_manager.new_file().unwrap();
         let sstable = build_sstable(1, 5, 1, file);
         assert_eq!(sstable.to_string(), "(key: 1,value: 1)(key: 2,value: 2)(key: 3,value: 3)(key: 4,value: 4)");
@@ -359,7 +359,7 @@ pub mod test {
     #[test]
     fn test_get_sstable_meta() {
         let dir = tempdir().unwrap();
-        let mut file_manager = FileStorageManager::new(dir.into_path());
+        let mut file_manager = FileStorageManager::new(dir.path());
         let (file, _, _) = file_manager.new_file().unwrap();
         let sstable_1 = build_sstable(1, 10, 2, file);
         let mut iter_1 = sstable_1.iter().unwrap();
@@ -367,7 +367,7 @@ pub mod test {
 
         let dir = tempdir().unwrap();
         let path = dir.into_path();
-        let mut file_manager = FileStorageManager::new(path.clone());
+        let mut file_manager = FileStorageManager::new(path.as_path());
         let (mut sstable_2_file, id, _) = file_manager.new_file().unwrap();
         let sstable_2 = SSTable::from_iter(&mut iter_1, sstable_2_file).unwrap();
         let sstable_2_meta = sstable_2.block_metadata();
@@ -380,7 +380,7 @@ pub mod test {
     #[test]
     fn test_stable_meta_last_key() {
         let dir = tempdir().unwrap();
-        let mut file_manager = FileStorageManager::new(dir.into_path());
+        let mut file_manager = FileStorageManager::new(dir.path());
         let (file, _, _) = file_manager.new_file().unwrap();
         let sstable_1 = build_sstable(1, 10, 2, file);
         assert_eq!(sstable_1.sstable_metas.last_key(), Key::new("9"));

@@ -63,7 +63,7 @@ mod test {
     #[test]
     fn test_add_and_check_iter() {
         let path = temp_dir();
-        let mut file_manager = FileStorageManager::new(path.clone());
+        let mut file_manager = FileStorageManager::new(&path);
         let (mut file, id, _) = file_manager.new_file().unwrap();
         let mut meta_log = MetaLog::new(file);
         let data_a: Vec<u8> = vec![1, 2, 4];

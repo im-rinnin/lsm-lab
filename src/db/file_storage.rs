@@ -39,8 +39,8 @@ impl FileStorageManager {
         let max_file_id = file_names.iter().max().unwrap();
         Ok(FileStorageManager { home_path, next_file_id: max_file_id + 1, all_file_ids: file_names })
     }
-    pub fn new(home_path: PathBuf) -> Self {
-        FileStorageManager { home_path, next_file_id: START_ID, all_file_ids: Vec::new() }
+    pub fn new(home_path: &Path) -> Self {
+        FileStorageManager { home_path:PathBuf::from(home_path), next_file_id: START_ID, all_file_ids: Vec::new() }
     }
     pub fn new_thread_safe_manager(home_path: PathBuf) -> ThreadSafeFileManager {
         Arc::new(Mutex::new(FileStorageManager { home_path, next_file_id: START_ID, all_file_ids: Vec::new() }))
@@ -92,7 +92,7 @@ mod test {
     #[test]
     fn test_create_file() {
         let dir = tempdir().unwrap();
-        let mut manager = FileStorageManager::new(dir.into_path());
+        let mut manager = FileStorageManager::new(dir.path());
         let (mut file, file_id, _) = manager.new_file().unwrap();
         let number = 11;
         assert_eq!(file_id, 0);
@@ -109,7 +109,7 @@ mod test {
     fn test_build_manager_from_exiting_dir() {
         let dir = tempdir().unwrap();
         let path = dir.into_path();
-        let mut manager = FileStorageManager::new(path.clone());
+        let mut manager = FileStorageManager::new(&path);
         manager.new_file().unwrap();
         manager.new_file().unwrap();
         manager.new_file().unwrap();
@@ -121,7 +121,7 @@ mod test {
     #[test]
     fn test_prune_file() {
         let dir = tempdir().unwrap();
-        let mut manager = FileStorageManager::new(dir.into_path());
+        let mut manager = FileStorageManager::new(dir.path());
         let (_, _, path_a) = manager.new_file().unwrap();
         let (_, id_b, path_b) = manager.new_file().unwrap();
 
@@ -138,7 +138,7 @@ mod test {
     #[test]
     fn test_multiple_thread() {
         let dir = tempdir().unwrap();
-        let manager = FileStorageManager::new(dir.into_path());
+        let manager = FileStorageManager::new(dir.path());
         let thread_safe_manager = manager.to_thread_safe();
         let mut handles = Vec::new();
         for _ in 0..10 {
