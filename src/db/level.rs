@@ -210,13 +210,15 @@ impl Level {
         self.sstable_file_metas.len()
     }
 
-    // return all sstable in level 0
     // roundround pick in level n>0
-    pub fn pick_file_to_compact(&self) -> Result<Vec<SSTable>> {
-        // let len = self.sstable_file_metas.len();
-        // let file_meta = self.sstable_file_metas.get(len / 2).unwrap();
-        // self.get_sstable(&file_meta)
-        todo!()
+    pub fn pick_file_to_compact(&self) -> Result<SSTable> {
+        let sstable_meta = self.find_oldest_sstable();
+        self.get_sstable(sstable_meta)
+    }
+
+    fn find_oldest_sstable(&self) -> &SStableFileMeta {
+        let res = self.sstable_file_metas.iter().min_by(|a,b| a.file_id.cmp(&b.file_id)).unwrap();
+        res
     }
 }
 
@@ -326,6 +328,16 @@ mod test {
         assert!(level.get(&Key::new("303")).unwrap().is_none());
         assert!(level.get(&Key::new("304")).unwrap().is_none());
         assert!(level.get(&Key::new("400")).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_find_oldest_sstable() {
+        let level = build_level();
+        let res = level.find_oldest_sstable();
+        assert_eq!(res.file_id, 0);
+        assert_eq!(res.start_key, Key::new("100"));
+        let res=level.pick_file_to_compact().unwrap();
+        assert_eq!(res.start_key(), &Key::new("100"));
     }
 
     #[test]
