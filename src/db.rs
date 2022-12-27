@@ -286,7 +286,7 @@ mod test {
                 }
                 for i in 0..1000 {
                     let value = db_client.get(&Key::from(i.to_string().as_bytes())).unwrap().unwrap();
-                    assert_eq!(*value, Value::new(&i.to_string()))
+                    assert_eq!(value, Value::new(&i.to_string()))
                 }
             });
             handles.push(handle);
