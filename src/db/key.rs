@@ -2,8 +2,9 @@ use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 use std::slice::from_raw_parts;
 
-use serde::{Deserialize,Serialize};
-#[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Debug, Hash,Deserialize,Serialize)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Eq, PartialEq, PartialOrd, Ord, Debug, Hash, Deserialize, Serialize)]
 pub struct Key {
     k: String,
 }
@@ -142,10 +143,11 @@ mod test {
         assert!(!a_key_slice.eq(&b_key_slice));
         assert_eq!(a_key_slice.cmp(&b_key_slice), Ordering::Greater);
     }
+
     #[test]
     pub fn test_key_slice_display() {
         let key = Key::new("123");
-        let key_slice=KeySlice::new(key.data());
+        let key_slice = KeySlice::new(key.data());
         assert_eq!(key_slice.to_string(), "123");
     }
 }

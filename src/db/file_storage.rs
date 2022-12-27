@@ -48,7 +48,7 @@ impl FileStorageManager {
 
     pub fn new_file(&mut self) -> Result<(File, FileId, PathBuf)> {
         let file_id = self.next_file_id;
-        let path = FileStorageManager::file_path(self.home_path.as_path(),&file_id);
+        let path = FileStorageManager::file_path(self.home_path.as_path(), &file_id);
         self.all_file_ids.push(self.next_file_id);
         self.next_file_id += 1;
         let res = File::options().write(true).read(true).create(true).open(path.clone())?;
@@ -58,7 +58,7 @@ impl FileStorageManager {
     pub fn prune_files(&mut self, all_active_file: HashSet<FileId>) -> Result<()> {
         for file_id in &self.all_file_ids {
             if !all_active_file.contains(file_id) {
-                fs::remove_file(FileStorageManager::file_path(self.home_path.as_path(),file_id))?;
+                fs::remove_file(FileStorageManager::file_path(self.home_path.as_path(), file_id))?;
             }
         }
         self.all_file_ids.retain(|file_id| all_active_file.contains(file_id));
@@ -70,20 +70,19 @@ impl FileStorageManager {
         path
     }
 
-    pub fn open_file(home_path:&Path,file_id:&FileId)->Result<File>{
+    pub fn open_file(home_path: &Path, file_id: &FileId) -> Result<File> {
         let path = Self::file_path(home_path, file_id);
         let res = File::open(path)?;
         Ok(res)
     }
-
 }
 
 #[cfg(test)]
 mod test {
-    use std::thread;
     use std::collections::HashSet;
     use std::io::{Seek, SeekFrom};
     use std::path::Path;
+    use std::thread;
 
     use byteorder::{ReadBytesExt, WriteBytesExt};
     use tempfile::tempdir;

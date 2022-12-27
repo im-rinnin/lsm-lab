@@ -38,8 +38,8 @@ impl Version {
     }
 
     // pick and find one level to compact
-    pub fn compact_one_level(&self) -> Option<(Self, LevelChange)>{
-    todo!()
+    pub fn compact_one_level(&self) -> Option<(Self, LevelChange)> {
+        todo!()
     }
 
     // for sstable file prune

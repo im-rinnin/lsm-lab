@@ -26,7 +26,7 @@ impl ValueSlice {
     }
 }
 
-impl Display for ValueSlice{
+impl Display for ValueSlice {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         unsafe {
             let a = from_raw_parts(self.ptr, self.size);
@@ -61,9 +61,9 @@ mod test {
     use crate::db::value::{Value, ValueSlice};
 
     #[test]
-    fn  test_display(){
-        let v=Value::new("123");
-        let v_slice=ValueSlice::new(v.data());
-        assert_eq!(v_slice.to_string(),"123");
+    fn test_display() {
+        let v = Value::new("123");
+        let v_slice = ValueSlice::new(v.data());
+        assert_eq!(v_slice.to_string(), "123");
     }
 }

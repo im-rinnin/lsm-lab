@@ -275,7 +275,7 @@ mod test {
         let c = build_sstable(26, 30, 1, c_file);
         let c_meta = SStableFileMeta::new(c.start_key().clone(), c.last_key().clone(), 2);
 
-        let level=Level::new(vec![a_meta, b_meta, c_meta], path, Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(10).unwrap()))), Arc::new(Mutex::new(file_manager)));
+        let level = Level::new(vec![a_meta, b_meta, c_meta], path, Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(10).unwrap()))), Arc::new(Mutex::new(file_manager)));
 
         let res = level.get_in_level_0(&Key::new("12")).unwrap();
         assert_eq!(res, Some(Value::new("12")));
@@ -288,7 +288,6 @@ mod test {
 
         let res = level.get_in_level_0(&Key::new("1")).unwrap();
         assert!(res.is_none());
-
     }
 
     #[test]
