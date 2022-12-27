@@ -114,20 +114,28 @@ impl Level {
         let sstable_meta = self.sstable_file_metas.last().expect("sstable ids wouldn't be empty");
         sstable_meta.last_key.clone()
     }
+    fn first_key(&self) -> Key {
+        let sstable_meta = self.sstable_file_metas.first().expect("sstable ids wouldn't be empty");
+        sstable_meta.start_key.clone()
+    }
     // find all sstable which key range has overlap in [start_key,end_key]
-    fn key_overlap(&self, start_key: &Key, end_key: &Key) -> Vec<SStableFileMeta> {
+    // return first overlaps sstable position
+    fn key_overlap(&self, start_key: &Key, end_key: &Key) -> Option<(Vec<SStableFileMeta>, usize)> {
         let last_key = self.last_key();
         if last_key.lt(&start_key) {
-            return Vec::new();
+            return None;
+        }
+        if self.first_key().gt(&end_key) {
+            return None;
         }
         // find first sstable which last key is greater or equal to start_key as first sstable
         let start = self.sstable_file_metas.partition_point(|sstable_meta| sstable_meta.last_key().lt(&start_key));
         // find last sstable which last key is greater or equal to end_key as end sstable
         if last_key.le(&end_key) {
-            return Vec::from(&self.sstable_file_metas[start..]);
+            return Some((Vec::from(&self.sstable_file_metas[start..]), start));
         }
         let end = self.sstable_file_metas.partition_point(|sstable_meta| sstable_meta.last_key().lt(&end_key));
-        return Vec::from(&self.sstable_file_metas[start..end + 1]);
+        return Some((Vec::from(&self.sstable_file_metas[start..end + 1]), start));
     }
 
     pub fn write_memtable_to_sstable_file(memtable: &Memtable, file_manager: &mut FileStorageManager) -> Result<Vec<SStableFileMeta>> {
@@ -151,7 +159,7 @@ impl Level {
         let start_key: Key = input_sstables_metas.iter().map(|sstable| sstable.start_key()).min().unwrap();
         let end_key: Key = input_sstables_metas.iter().map(|sstable| sstable.last_key()).max().unwrap();
         // find key overlap sstable
-        let mut sstable_overlap = self.key_overlap(&start_key, &end_key);
+        let mut sstable_overlap = self.key_overlap(&start_key, &end_key).unwrap().0;
         input_sstables_metas.append(&mut sstable_overlap);
 
         let mut input_sstables = Vec::new();
@@ -205,9 +213,10 @@ impl Level {
     // return all sstable in level 0
     // roundround pick in level n>0
     pub fn pick_file_to_compact(&self) -> Result<Vec<SSTable>> {
-        let len = self.sstable_file_metas.len();
-        let file_meta = self.sstable_file_metas.get(len / 2).unwrap();
-        self.get_sstable(&file_meta)
+        // let len = self.sstable_file_metas.len();
+        // let file_meta = self.sstable_file_metas.get(len / 2).unwrap();
+        // self.get_sstable(&file_meta)
+        todo!()
     }
 }
 
@@ -324,26 +333,36 @@ mod test {
         // [100-200),[205-300),[305-400)
         let level = build_level();
         let res = level.key_overlap(&Key::new("050"), &Key::new("080"));
+        assert!(res.is_none());
+
+        let res = level.key_overlap(&Key::new("050"), &Key::new("100")).unwrap().0;
         assert_eq!(res.len(), 1);
         assert_eq!(res.get(0).unwrap().last_key(), Key::new("199"));
 
+        let res = level.key_overlap(&Key::new("399"), &Key::new("480")).unwrap().0;
+        assert_eq!(res.len(), 1);
+        assert_eq!(res.get(0).unwrap().last_key(), Key::new("399"));
+
         let res = level.key_overlap(&Key::new("450"), &Key::new("480"));
-        assert_eq!(res.len(), 0);
+        assert!(res.is_none());
 
-        let res = level.key_overlap(&Key::new("120"), &Key::new("280"));
-        assert_eq!(res.len(), 2);
-        assert_eq!(res.get(1).unwrap().last_key(), Key::new("299"));
+        let res = level.key_overlap(&Key::new("120"), &Key::new("280")).unwrap();
+        let metas = res.0;
+        assert_eq!(metas.len(), 2);
+        assert_eq!(metas.get(1).unwrap().last_key(), Key::new("299"));
+        assert_eq!(res.1, 0);
 
-        let res = level.key_overlap(&Key::new("090"), &Key::new("380"));
+        let res = level.key_overlap(&Key::new("090"), &Key::new("380")).unwrap().0;
         assert_eq!(res.len(), 3);
 
-        let res = level.key_overlap(&Key::new("199"), &Key::new("280"));
+        let res = level.key_overlap(&Key::new("199"), &Key::new("280")).unwrap().0;
         assert_eq!(res.len(), 2);
 
-        let res = level.key_overlap(&Key::new("200"), &Key::new("305"));
-        assert_eq!(res.len(), 2);
+        let res = level.key_overlap(&Key::new("200"), &Key::new("305")).unwrap();
+        assert_eq!(res.0.len(), 2);
+        assert_eq!(res.1, 1);
 
-        let res = level.key_overlap(&Key::new("199"), &Key::new("305"));
+        let res = level.key_overlap(&Key::new("199"), &Key::new("305")).unwrap().0;
         assert_eq!(res.len(), 3);
     }
 
