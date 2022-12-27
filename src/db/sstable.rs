@@ -143,9 +143,13 @@ impl SSTable {
     /// use BufWriter if possible
     pub fn from_iter(kv_iters: &mut dyn Iterator<Item=KVIterItem>,
                      mut file: File) -> Result<SSTable> {
+        Self::from_iter_with_file_limit(kv_iters, file, Self::SSTABLE_SIZE_LIMIT)
+    }
+    pub fn from_iter_with_file_limit(kv_iters: &mut dyn Iterator<Item=KVIterItem>,
+                                     mut file: File, limit_file_size: usize) -> Result<SSTable> {
         let mut block_builder = BlockBuilder::new();
         let mut entry_count = 0;
-        let mut block_metas = Vec::with_capacity(Self::SSTABLE_SIZE_LIMIT / BLOCK_SIZE as usize);
+        let mut block_metas = Vec::new();
         let mut last_block_position = 0;
         let mut start_key = None;
         let sstable_writer = &mut file;
@@ -180,7 +184,7 @@ impl SSTable {
                 }
                 None => { break; }
             }
-            if last_block_position >= Self::SSTABLE_SIZE_LIMIT as u64 {
+            if limit_file_size > 0 && last_block_position >= limit_file_size as u64 {
                 info!("sstable size is {:}, reach file limit",last_block_position);
                 break;
             }
