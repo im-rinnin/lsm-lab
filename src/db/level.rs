@@ -31,13 +31,13 @@ pub struct Level {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum LevelChange {
     // add new sstable to level start from position_in_level,sstable order is same as sstable_file_metas
-    MEMTABLE_COMPACT { sstable_file_metas: Vec<SStableFileMeta> },
+    MEMTABLE_COMPACT { sstable_file_metas: SStableFileMeta },
     LEVEL_COMPACT {
         // compact 1 to 2, compact_from_leve is 1
         compact_from_level: usize,
         remove_sstable_file_ids: Vec<FileId>,
         add_sstable_file_metas: Vec<SStableFileMeta>,
-        add_position:usize
+        add_position: usize,
     },
 }
 
@@ -190,7 +190,7 @@ impl Level {
         Ok(res)
     }
 
-    pub fn copy_sstable_meta(&self)->Vec<SStableFileMeta>{
+    pub fn copy_sstable_meta(&self) -> Vec<SStableFileMeta> {
         self.sstable_file_metas.clone()
     }
 
@@ -200,6 +200,14 @@ impl Level {
 
     pub fn len(&self) -> usize {
         self.sstable_file_metas.len()
+    }
+
+    // return all sstable in level 0
+    // roundround pick in level n>0
+    pub fn pick_file_to_compact(&self) -> Result<Vec<SSTable>> {
+        let len = self.sstable_file_metas.len();
+        let file_meta = self.sstable_file_metas.get(len / 2).unwrap();
+        self.get_sstable(&file_meta)
     }
 }
 
