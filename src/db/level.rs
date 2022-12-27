@@ -153,13 +153,15 @@ impl Level {
     }
 
     // compact n-1 level sstable to this level, build new sstable, return all sstable file id after compact, level is unchanged in compact
-    // todo handle empty level
-    // todo return level change
-    pub fn compact_sstable(&self, mut input_sstables_metas: Vec<SStableFileMeta>) -> Result<Vec<SStableFileMeta>> {
+    pub fn compact_sstable(&self, mut input_sstables_metas: Vec<SStableFileMeta>) -> Result<(Vec<SStableFileMeta>, usize)> {
         let start_key: Key = input_sstables_metas.iter().map(|sstable| sstable.start_key()).min().unwrap();
         let end_key: Key = input_sstables_metas.iter().map(|sstable| sstable.last_key()).max().unwrap();
         // find key overlap sstable
-        let mut sstable_overlap = self.key_overlap(&start_key, &end_key).unwrap().0;
+        let key_overlap_res = self.key_overlap(&start_key, &end_key);
+        if key_overlap_res.is_none() {
+            return Ok((input_sstables_metas, 0));
+        }
+        let (mut sstable_overlap, start_position) = key_overlap_res.unwrap();
         input_sstables_metas.append(&mut sstable_overlap);
 
         let mut input_sstables = Vec::new();
@@ -195,7 +197,7 @@ impl Level {
                 break;
             }
         }
-        Ok(res)
+        Ok((res, start_position))
     }
 
     pub fn copy_sstable_meta(&self) -> Vec<SStableFileMeta> {
@@ -217,7 +219,7 @@ impl Level {
     }
 
     fn find_oldest_sstable(&self) -> &SStableFileMeta {
-        let res = self.sstable_file_metas.iter().min_by(|a,b| a.file_id.cmp(&b.file_id)).unwrap();
+        let res = self.sstable_file_metas.iter().min_by(|a, b| a.file_id.cmp(&b.file_id)).unwrap();
         res
     }
 }
@@ -418,7 +420,7 @@ mod test {
 
         let mut level = Level::new(vec![c_file_meta, d_file_meta, e_file_meta], home_path.clone(), Level::new_cache(10), file_manager);
 
-        let mut file_sstable = level.compact_sstable(vec![a_file_meta, b_file_meta]).unwrap();
+        let (mut file_sstable,position) = level.compact_sstable(vec![a_file_meta, b_file_meta]).unwrap();
         assert_eq!(file_sstable.len(), 1);
         let file_id = file_sstable.pop().unwrap().file_id;
         let mut file = FileStorageManager::open_file(&home_path, &file_id).unwrap();
