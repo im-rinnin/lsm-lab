@@ -60,7 +60,7 @@ impl Level {
     pub fn get_in_level_0(&self, key: &Key) -> Result<Option<Value>> {
         assert!(!self.sstable_file_metas.is_empty());
 
-        if self.last_key().le(key) {
+        if self.last_key().lt(key) {
             return Ok(None);
         }
 
@@ -76,7 +76,7 @@ impl Level {
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
         assert!(!self.sstable_file_metas.is_empty());
 
-        if self.last_key().le(key) {
+        if self.last_key().lt(key) {
             return Ok(None);
         }
         // binary search sstable which key range contains key
@@ -260,7 +260,7 @@ mod test {
 
     #[test]
     fn test_get_in_level_0() {
-        // a:[11,20] b[15,25) c[26,30)
+        // a:[11,20) b[15,25) c[26,30)
         // set 16 to "a" in a
         let dir = tempdir().unwrap();
         let path = dir.into_path();
@@ -291,6 +291,9 @@ mod test {
         let res = level.get_in_level_0(&Key::new("19")).unwrap();
         assert_eq!(res, Some(Value::new("19")));
 
+        let res = level.get_in_level_0(&Key::new("29")).unwrap();
+        assert_eq!(res, Some(Value::new("29")));
+
         let res = level.get_in_level_0(&Key::new("1")).unwrap();
         assert!(res.is_none());
     }
@@ -300,8 +303,12 @@ mod test {
         let level = build_level();
         assert_eq!(Value::new("126"), level.get(&Key::new("126")).unwrap().unwrap());
         assert_eq!(Value::new("226"), level.get(&Key::new("226")).unwrap().unwrap());
+        assert_eq!(Value::new("399"), level.get(&Key::new("399")).unwrap().unwrap());
+        assert_eq!(Value::new("305"), level.get(&Key::new("305")).unwrap().unwrap());
         assert!(level.get(&Key::new("526")).unwrap().is_none());
         assert!(level.get(&Key::new("303")).unwrap().is_none());
+        assert!(level.get(&Key::new("304")).unwrap().is_none());
+        assert!(level.get(&Key::new("400")).unwrap().is_none());
     }
 
     #[test]
