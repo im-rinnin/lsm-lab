@@ -13,7 +13,7 @@ use crate::db::value::Value;
 // immutable, thread safe,create new version after insert new sstable/compact
 pub struct Version {
     // all level info,order by level number,vec[0]->level 0
-    levels: HashMap<usize,Level>,
+    levels: HashMap<usize, Level>,
     file_manager: FileStorageManager,
 }
 
@@ -31,22 +31,16 @@ impl Version {
         todo!()
     }
 
-    // return all sstable in level 0
-    pub fn add_new_sstable_to_level_0(&self, memtable: Memtable) -> (Self, Vec<FileId>) {
+    pub fn add_memtable_to_level_0(&self, memtable: &Memtable) -> (Self, LevelChange) {
         // build sstable from memtable (sstable::build)
         // create table
         todo!()
     }
 
-    // return all sstable file id in level
-    pub fn compact_level(&self, level: usize) -> (Self, Vec<FileId>) {
-        todo!()
+    // pick and find one level to compact
+    pub fn compact_one_level(&self) -> Option<(Self, LevelChange)>{
+    todo!()
     }
-
-    pub fn from_level_change(&self, level_change: &LevelChange) -> Self {
-        todo!()
-    }
-
 
     // for sstable file prune
     pub fn all_file_id(&self) -> Vec<FileId> {

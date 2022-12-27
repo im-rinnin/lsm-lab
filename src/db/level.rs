@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::common::{KVIterItem, SortedKVIter, ValueSliceTag};
 use crate::db::file_storage::{FileId, FileStorageManager, ThreadSafeFileManager};
 use crate::db::key::{Key, KeySlice};
-use crate::db::memtable::{Memtable};
+use crate::db::memtable::Memtable;
 use crate::db::sstable::{SSTable, SStableBlockMeta, SStableIter};
 use crate::db::value::{Value, ValueSlice};
 
@@ -45,6 +45,10 @@ pub struct SStableFileMeta {
     file_id: FileId,
     start_key: Key,
     last_key: Key,
+}
+
+pub fn apply_level_change(sstable_file_meta: &Vec<SStableFileMeta>) -> Vec<SStableFileMeta> {
+    todo!()
 }
 
 impl Level {
@@ -120,7 +124,7 @@ impl Level {
 
     // compact n-1 level sstable to this level, build new sstable, return all sstable file id after compact, level is unchanged in compact
     // todo handle empty level
-    // todo return all sstable file meta
+    // todo return level change
     pub fn compact_sstable(&self, mut input_sstables_metas: Vec<SStableFileMeta>) -> Result<Vec<SStableFileMeta>> {
         let start_key: Key = input_sstables_metas.iter().map(|sstable| sstable.start_key()).min().unwrap();
         let end_key: Key = input_sstables_metas.iter().map(|sstable| sstable.last_key()).max().unwrap();

@@ -1,11 +1,13 @@
+use std::{sync, thread};
 use std::borrow::{Borrow, BorrowMut};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::sync::mpsc::{Receiver, Sender};
+use std::time::Duration;
 
 use anyhow::Result;
 use serde_json::{from_str, to_string};
@@ -14,7 +16,7 @@ use key::Key;
 use memtable::Memtable;
 use value::Value;
 
-use crate::db::file_storage::{FileId, ThreadSafeFileManager};
+use crate::db::file_storage::{FileId, FileStorageManager, ThreadSafeFileManager};
 use crate::db::level::{Level, LevelChange, SStableFileMeta};
 use crate::db::memtable_log::MemtableLog;
 use crate::db::meta_log::MetaLog;
@@ -33,54 +35,81 @@ mod memtable_log;
 
 mod version;
 
-type ThreadSafeVersion = Arc<RwLock<Arc<Version>>>;
+
+// (memtable,immutable_memtable,version)
+type ThreadSafeData = Arc<RwLock<(Arc<Mutex<Arc<Memtable>>>, Option<Arc<Memtable>>, Arc<Mutex<Arc<Version>>>)>>;
+
+
+const level_0_limit: usize = 8;
+const memtable_len_limit: usize = 4 * 1024 * 1024;
+const meta_log_file_name: &str = "meta";
 
 // todo thread safe design multiple thread access
 pub struct DBServer {
     path: String,
-    current_memtable_ref: Arc<RwLock<Arc<Memtable>>>,
-    immutable_memtable_ref: Arc<RwLock<Option<Arc<Memtable>>>>,
-    versions: ThreadSafeVersion,
+    data: ThreadSafeData,
     meta_log: MetaLog,
     file_manager: ThreadSafeFileManager,
 }
 
-#[derive(Clone)]
 pub struct DBClient {
-    current_memtable_ref: Arc<RwLock<Arc<Memtable>>>,
-    immutable_memtable_ref: Arc<RwLock<Arc<Memtable>>>,
-    versions: ThreadSafeVersion,
+    data: ThreadSafeData,
+    finish_notify_sender: Sender<()>,
+    finish_notify_receiver: Receiver<()>,
+    write_request_sender: Sender<WriteRequest>,
 }
+
+pub struct WriteRequest {
+    key: Key,
+    value: Value,
+    finish: Sender<()>,
+}
+
 
 // todo use myerror create
 #[derive(Debug)]
 pub struct MyError {}
 
-impl DBClient {
-    pub fn get(&self, key: &Key) -> Result<Option<&Value>, MyError> {
-        // search in current memtable
-        // let memtable=(*self.current_memtable_ref).read();
-        // if memtable.is_err(){
-        //     return Err(MyError::)
-        // }
+fn get_current_data(data: &ThreadSafeData) -> (Arc<Memtable>, Option<Arc<Memtable>>, Arc<Version>) {
+    let read_res = data.read().unwrap();
+    let (a, b, c) = read_res.deref();
+    let memtable = a.lock().unwrap().clone();
+    let imm_memtable = if let Some(n) = b {
+        Some(n.clone())
+    } else {
+        None
+    };
+    let version = c.lock().unwrap().clone();
+    (memtable, imm_memtable, version)
+}
 
-        // search in memtable_to_be_compact
+impl DBClient {
+    pub fn get(&self, key: &Key) -> Result<Option<Value>, MyError> {
+        let (memtable, immutable_memtable, version) = get_current_data(&self.data);
+        // search in current memtable
+        let res = memtable.get(&key);
+        if res.is_some() {
+            return Ok(res);
+        }
+
+        // search in immutable memtable
+        if let Some(memtable) = immutable_memtable.as_deref() {
+            let res = memtable.get(key);
+            if let Some(value) = res {
+                return Ok(Some(value));
+            }
+        }
+
         // search in current version
-        todo!()
+        let res = version.get(&key);
+        Ok(res)
     }
 
-    pub fn put(&mut self, key: &Key, value: Value) -> Result<(), MyError> {
-        // check if level 0 file number, if >8 , wait 1ms
-        // check and return error if current memtable is full
-        // put in current memtable,put int memtable_log
-        // if memtable is not full, return
-        // check compact trigger by cas
-        // add memtable to memtable_to_be_compact, create new empty memtable
-
-        // call compact thread do memtable compact by channel
-
-        // return
-        todo!()
+    pub fn put(&mut self, key: &Key, value: Value) -> Result<()> {
+        let write_request = WriteRequest { key: key.clone(), value, finish: self.finish_notify_sender.clone() };
+        self.write_request_sender.send(write_request);
+        let _ = self.finish_notify_receiver.recv()?;
+        Ok(())
     }
 }
 
@@ -88,6 +117,7 @@ impl DBServer {
     pub fn open_db(path: String) -> Result<Self> {
         //     open memtable_log
         //     build version from log
+
         // call init routine
         todo!()
     }
@@ -107,104 +137,102 @@ impl DBServer {
         todo!()
     }
 
-    fn compact_routine(&mut self, do_compact: Receiver<()>) -> Result<()> {
-        // block on memtable need compact channel
-        for _ in do_compact.iter() {
-            // compact memtable
-            let compact_memtable_level_change = self.compact_memtable()?;
-            // change version
-            let version = self.build_version(&compact_memtable_level_change);
-            self.save_level_change_to_meta_log(&compact_memtable_level_change);
-            self.set_current_version(version);
-            // compact level
-            let compact_level_change_option = self.compact_level()?;
-            // change version
-            if let Some(compact_level_change) = compact_level_change_option {
-                let version = self.build_version(&compact_level_change);
-                self.set_current_version(version);
-            }
-        }
-        Ok(())
-    }
-
-    fn build_version(&self, level_change: &LevelChange) -> Version {
-        let current_version = self.versions.read().expect("current version lock failed");
-        let new_version = current_version.from_level_change(level_change);
-        new_version
-    }
-
-
-    fn save_level_change_to_meta_log(&mut self, level_change: &LevelChange) -> Result<()> {
+    fn save_level_change_to_meta_log(meta_log: &mut MetaLog, level_change: &LevelChange) -> Result<()> {
         let data = serde_json::to_string(level_change)?;
-        self.meta_log.add_data(data.as_bytes())
+        meta_log.add_data(data.as_bytes())
     }
 
-    fn set_current_version(&mut self, version: Version) -> Result<()> {
-        let mut current_version = self.versions.write().expect("current version lock failed");
-        *current_version = Arc::new(version);
-        Ok(())
-    }
 
-    fn compact_memtable(&mut self) -> Result<LevelChange> {
-        // - build sstable from memtable, add to level 0,
-        let memtable = self.immutable_memtable_ref.read().unwrap();
-        let a = memtable.as_deref();
-        let d = a.expect("should have immutable memtable");
-        let c: &Memtable = d.borrow();
-        let mut m = self.file_manager.lock().expect("fail to get file manager lock");
-        let h = m.borrow_mut();
-        let sstable_file_metas = Level::write_memtable_to_sstable_file(c, h)?;
-        let level_change = LevelChange::MEMTABLE_COMPACT { sstable_file_metas };
-        Ok(level_change)
-    }
+    fn write_routine(data: ThreadSafeData, write_request_channel: Receiver<WriteRequest>, compact_condition_pair: Arc<(Mutex<bool>, Condvar)>) -> Result<()> {
+        const write_size_limit: usize = 100;
+        let mut write_size_count = 0;
+        loop {
+            let lock_result = data.write().unwrap();
+            let (memtable_ref, b, c) = lock_result.deref();
+            let mut memtable = (*memtable_ref).lock().unwrap().clone();
+            drop(lock_result);
 
-    // check and find one level to compact
-    fn compact_level(&mut self) -> Result<Option<LevelChange>> {
-        // - check level 1 to n ,find first level need compact,pick random file to compact for this level
-        let version = self.versions.read().unwrap();
-        let version_ref = version.as_ref();
-        for i in 0..version_ref.depth() {
-            let level_metas = version_ref.get_level_file_meta(i);
-            if let Some(picked_sstable) = Self::pick_file_to_compact(level_metas) {
-                let next_level_opt = version_ref.get_level(i + 1);
-                if let Some(next_level) = next_level_opt {
-                    let res = next_level.compact_sstable(picked_sstable)?;
-                    // @continue
-                    //     return
-                } else {
-                    return Ok(Some(LevelChange::LEVEL_COMPACT { compact_from_level: i, remove_sstable_file_ids: Vec::new(), add_sstable_file_metas: picked_sstable }));
+            // write data to memtable
+            loop {
+                let request = write_request_channel.recv()?;
+                let request_size = request.key.len() + request.value.len();
+                write_size_count += request_size;
+
+                memtable.insert(&request.key, &request.value);
+                if write_size_count > write_size_limit {
+                    break;
                 }
             }
+
+            // need compact
+            // wait compact finish
+            let (lock, cvar) = &*compact_condition_pair;
+            let mut compact_is_finish = lock.lock().unwrap();
+            while !*compact_is_finish {
+                compact_is_finish = cvar.wait(compact_is_finish).unwrap();
+            }
+
+            // set immutable memtable
+            let mut lock_result = data.write().unwrap();
+            let (memtable_ref, immutable_memtable, c) = lock_result.deref_mut();
+            assert!(immutable_memtable.is_some());
+            let mut memtable = memtable_ref.lock().unwrap();
+            let t = memtable.clone();
+            *immutable_memtable = Some(t);
+            *memtable = Arc::new(Memtable::new());
+
+            write_size_count = 0;
         }
-        Ok(None)
     }
 
-    fn pick_file_to_compact(level_metas: Vec<SStableFileMeta>) -> Option<Vec<SStableFileMeta>> {
-        todo!()
+    fn compact_routine(mut data: ThreadSafeData, mut file_manager: FileStorageManager, compact_condition_pair: Arc<(Mutex<bool>, Condvar)>, mut meta_log: MetaLog, start_compact: Receiver<()>) {
+        loop {
+            let res = start_compact.recv();
+            if let Ok(()) = res {
+                Self::compact(&mut data, &mut file_manager, compact_condition_pair.clone(), &mut meta_log);
+            } else {
+                //     todo log exit
+                return;
+            }
+        }
     }
 
-    fn get_current_memtable(&self) -> Arc<Memtable> {
-        let memtable = self.current_memtable_ref.read().unwrap();
-        let res = memtable.clone();
-        res
-    }
-
-    fn move_current_memtable_to_immutable(&mut self) {
-        let mut memtable = self.current_memtable_ref.write().unwrap();
-        let mut immutable_memtable = self.immutable_memtable_ref.write().unwrap();
-        assert!(immutable_memtable.is_none());
-        *immutable_memtable = Some(memtable.clone());
-        *memtable = Arc::new(Memtable::new());
-    }
-
-    fn get_immutable_memtable(&self) ->Option<Arc<Memtable>>{
-        let res = self.immutable_memtable_ref.read().unwrap();
-        res.clone()
-    }
-
-    fn remove_immutable_memtable(&mut self){
-        let mut memtable = self.immutable_memtable_ref.write().unwrap();
-        *memtable = None;
+    fn compact(data: &mut ThreadSafeData, file_manager: &mut FileStorageManager, compact_condition_pair: Arc<(Mutex<bool>, Condvar)>, mut meta_log: &mut MetaLog) {
+        let (_, immutable_memtable_option, version) = get_current_data(&data);
+        //     append sstable to level 0
+        let imm_memtable = immutable_memtable_option.expect("must exits");
+        let (new_version, level_change) = version.add_memtable_to_level_0(imm_memtable.as_ref());
+        let new_version_arc = Arc::new(new_version);
+        // write level change to meta log
+        Self::save_level_change_to_meta_log(&mut meta_log, &level_change);
+        //     lock data
+        {
+            let mut lock_result = data.write().unwrap();
+            let (memtable_ref, immutable_memtable, version) = lock_result.deref_mut();
+            //     set immutable memtable to None
+            *immutable_memtable = None;
+            // set version
+            let mut v = version.lock().unwrap();
+            *v = new_version_arc.clone();
+            //     unlock data
+        }
+        //     notify write thread
+        let (lock, cvar) = &*compact_condition_pair;
+        let mut compact_is_finish = lock.lock().unwrap();
+        *compact_is_finish = true;
+        cvar.notify_all();
+        //     check level from 0 to n, do one level compact
+        let compact_res = new_version_arc.compact_one_level();
+        if let Some((version_after_compact_level, LevelChange)) = compact_res {
+            Self::save_level_change_to_meta_log(&mut meta_log, &level_change);
+            {
+                let mut lock_result = data.write().unwrap();
+                let (_, _, version) = lock_result.deref_mut();
+                let mut v = version.lock().unwrap();
+                *v = Arc::new(version_after_compact_level);
+                //     unlock data
+            }
+        }
     }
 
 
