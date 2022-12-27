@@ -56,6 +56,22 @@ impl Level {
     pub fn new(sstable_metas: Vec<SStableFileMeta>, home_path: PathBuf, cache: ThreadSafeSSTableMetaCache, file_manager: ThreadSafeFileManager) -> Self {
         Level { sstable_file_metas: sstable_metas, sstable_cache: cache, home_path, file_manager }
     }
+    pub fn get_in_level_0(&self, key: &Key) -> Result<Option<Value>> {
+        assert!(!self.sstable_file_metas.is_empty());
+
+        if self.last_key().le(key) {
+            return Ok(None);
+        }
+
+        for meta in &self.sstable_file_metas {
+            let sstable = self.get_sstable(meta)?;
+            let res = sstable.get(key)?;
+            if let Some(v) = res {
+                return Ok(Some(v));
+            }
+        }
+        Ok(None)
+    }
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
         assert!(!self.sstable_file_metas.is_empty());
 
@@ -68,11 +84,16 @@ impl Level {
         });
         // find in sstable
         let sstable_file_meta: &SStableFileMeta = self.sstable_file_metas.get(position).expect("must find");
+        let sstable = self.get_sstable(&sstable_file_meta)?;
+        sstable.get(key)
+    }
+
+    fn get_sstable(&self, sstable_file_meta: &SStableFileMeta) -> Result<SSTable> {
         let file_id = sstable_file_meta.file_id();
         let sstable_file_meta = self.get_sstable_meta(&file_id)?;
         let file = File::open(FileStorageManager::file_path(self.home_path.as_path(), &file_id))?;
         let sstable = SSTable::from(sstable_file_meta, file)?;
-        sstable.get(key)
+        Ok(sstable)
     }
 
     fn get_sstable_meta(&self, file_id: &FileId) -> Result<Arc<SStableBlockMeta>> {
@@ -230,6 +251,44 @@ mod test {
         let c_meta = SStableFileMeta::new(c.start_key().clone(), c.last_key().clone(), 2);
         // [100-200),[205-300),[305-400)
         Level::new(vec![a_meta, b_meta, c_meta], path, Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(10).unwrap()))), Arc::new(Mutex::new(file_manager)))
+    }
+
+    #[test]
+    fn test_get_in_level_0() {
+        // a:[11,20] b[15,25) c[26,30)
+        // set 16 to "a" in a
+        let dir = tempdir().unwrap();
+        let path = dir.into_path();
+        let mut file_manager = FileStorageManager::new(path.clone());
+        let a_file = file_manager.new_file().unwrap().0;
+        let mut map = HashMap::new();
+
+        map.insert(16, Some(Value::new("a")));
+
+        let a = build_sstable_with_special_value(11, 20, 1, map, a_file);
+        let a_meta = SStableFileMeta::new(a.start_key().clone(), a.last_key().clone(), 0);
+        // println!("{:?}", a.get(&Key::new("56")).unwrap());
+        let b_file = file_manager.new_file().unwrap().0;
+        let b = build_sstable(15, 25, 1, b_file);
+        let b_meta = SStableFileMeta::new(b.start_key().clone(), b.last_key().clone(), 1);
+        let c_file = file_manager.new_file().unwrap().0;
+        let c = build_sstable(26, 30, 1, c_file);
+        let c_meta = SStableFileMeta::new(c.start_key().clone(), c.last_key().clone(), 2);
+
+        let level=Level::new(vec![a_meta, b_meta, c_meta], path, Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(10).unwrap()))), Arc::new(Mutex::new(file_manager)));
+
+        let res = level.get_in_level_0(&Key::new("12")).unwrap();
+        assert_eq!(res, Some(Value::new("12")));
+
+        let res = level.get_in_level_0(&Key::new("16")).unwrap();
+        assert_eq!(res, Some(Value::new("a")));
+
+        let res = level.get_in_level_0(&Key::new("19")).unwrap();
+        assert_eq!(res, Some(Value::new("19")));
+
+        let res = level.get_in_level_0(&Key::new("1")).unwrap();
+        assert!(res.is_none());
+
     }
 
     #[test]
