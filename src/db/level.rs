@@ -37,6 +37,7 @@ pub enum LevelChange {
         compact_from_level: usize,
         remove_sstable_file_ids: Vec<FileId>,
         add_sstable_file_metas: Vec<SStableFileMeta>,
+        add_position:usize
     },
 }
 
@@ -134,7 +135,7 @@ impl Level {
         let mut res = Vec::new();
         loop {
             let (mut file, file_id, _) = file_manager.new_file()?;
-            let sstable = SSTable::build(&mut iter, file)?;
+            let sstable = SSTable::from_iter(&mut iter, file)?;
             res.push(SStableFileMeta::from(&sstable, file_id));
             if !iter.has_next() {
                 break;
@@ -179,7 +180,7 @@ impl Level {
         let mut res = Vec::new();
         loop {
             let (mut file, file_id, _) = self.file_manager.lock().unwrap().new_file()?;
-            let sstable = SSTable::build(&mut sorted_iter, file)?;
+            let sstable = SSTable::from_iter(&mut sorted_iter, file)?;
             let meta = SStableFileMeta::from(&sstable, file_id);
             res.push(meta);
             if !sorted_iter.has_next() {

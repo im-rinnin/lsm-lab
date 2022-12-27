@@ -11,7 +11,9 @@ use log::info;
 use serde::{Deserialize, Serialize};
 
 use crate::db::common::{KVIterItem, ValueSliceTag};
+use crate::db::file_storage::FileStorageManager;
 use crate::db::key::{Key, KEY_SIZE_LIMIT, KeySlice};
+use crate::db::level::SStableFileMeta;
 use crate::db::sstable::block::{Block, BLOCK_SIZE, BlockBuilder, BlockIter, BlockMeta};
 use crate::db::value::Value;
 
@@ -139,8 +141,8 @@ impl SSTable {
     }
     /// build new sstable, may not use out iterator if sstable size reach limit
     /// use BufWriter if possible
-    pub fn build(kv_iters: &mut dyn Iterator<Item=KVIterItem>,
-                 mut file: File) -> Result<SSTable> {
+    pub fn from_iter(kv_iters: &mut dyn Iterator<Item=KVIterItem>,
+                     mut file: File) -> Result<SSTable> {
         let mut block_builder = BlockBuilder::new();
         let mut entry_count = 0;
         let mut block_metas = Vec::with_capacity(Self::SSTABLE_SIZE_LIMIT / BLOCK_SIZE as usize);
@@ -254,7 +256,7 @@ pub mod test {
 
         let mut it = data.iter().map(|e| (KeySlice::new(e.0.data()),
                                           e.1.as_ref().map(|f| ValueSlice::new(f.data()))));
-        let sstable = SSTable::build(&mut it, file).unwrap();
+        let sstable = SSTable::from_iter(&mut it, file).unwrap();
         sstable
     }
 
@@ -288,7 +290,7 @@ pub mod test {
         let mut it = data.iter().map(|e| (KeySlice::new(e.0.data()),
                                           Some(ValueSlice::new(e.1.data()))));
         let mut c = tempfile::tempfile().unwrap();
-        let sstable = SSTable::build(&mut it, c).unwrap();
+        let sstable = SSTable::from_iter(&mut it, c).unwrap();
 
         // check sstable
         for i in 0..number {
@@ -336,7 +338,7 @@ pub mod test {
 
         let mut sorted_kv_iter = SortedKVIter::new(vec![&mut sstable_1_iter, &mut sstable_2_iter]);
         let mut sstable_3_file = tempfile::tempfile().unwrap();
-        let sstable_3 = SSTable::build(&mut sorted_kv_iter, sstable_3_file).unwrap();
+        let sstable_3 = SSTable::from_iter(&mut sorted_kv_iter, sstable_3_file).unwrap();
         let sstable_3_on_file_iter = sstable_3.iter().unwrap();
         for (i, data) in sstable_3_on_file_iter.enumerate() {
             unsafe {
@@ -367,7 +369,7 @@ pub mod test {
         let path = dir.into_path();
         let mut file_manager = FileStorageManager::new(path.clone());
         let (mut sstable_2_file, id, _) = file_manager.new_file().unwrap();
-        let sstable_2 = SSTable::build(&mut iter_1, sstable_2_file).unwrap();
+        let sstable_2 = SSTable::from_iter(&mut iter_1, sstable_2_file).unwrap();
         let sstable_2_meta = sstable_2.block_metadata();
 
         let mut file = FileStorageManager::open_file(path.as_path(), &id).unwrap();
