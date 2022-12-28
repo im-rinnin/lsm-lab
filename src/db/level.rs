@@ -28,16 +28,15 @@ pub struct Level {
     home_path: PathBuf,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize,Debug)]
 pub enum LevelChange {
     // add new sstable to level start from position_in_level,sstable order is same as sstable_file_metas
-    MEMTABLE_COMPACT { sstable_file_metas: SStableFileMeta },
-    LEVEL_COMPACT {
+    memtable_compact { sstable_file_metas: SStableFileMeta },
+    level_compact {
         // compact 1 to 2, compact_from_leve is 1
         compact_from_level: usize,
-        remove_sstable_file_ids: Vec<FileId>,
-        add_sstable_file_metas: Vec<SStableFileMeta>,
-        add_position: usize,
+        compact_sstable: SStableFileMeta,
+        compact_result: CompactSStableResult,
     },
 }
 
@@ -48,8 +47,11 @@ pub struct SStableFileMeta {
     last_key: Key,
 }
 
-pub fn apply_level_change(sstable_file_meta: &Vec<SStableFileMeta>) -> Vec<SStableFileMeta> {
-    todo!()
+#[derive(Clone,Deserialize,Serialize,Debug)]
+pub struct CompactSStableResult {
+    pub remove_sstables: Vec<SStableFileMeta>,
+    pub add_sstables: Vec<SStableFileMeta>,
+    pub position: usize,
 }
 
 impl Level {
@@ -59,10 +61,6 @@ impl Level {
     }
     pub fn get_in_level_0(&self, key: &Key) -> Result<Option<Value>> {
         assert!(!self.sstable_file_metas.is_empty());
-
-        if self.last_key().lt(key) {
-            return Ok(None);
-        }
 
         for meta in &self.sstable_file_metas {
             let sstable = self.get_sstable(meta)?;
@@ -152,17 +150,19 @@ impl Level {
         Ok(res)
     }
 
-    // compact n-1 level sstable to this level, build new sstable, return all sstable file id after compact, level is unchanged in compact
-    pub fn compact_sstable(&self, mut input_sstables_metas: Vec<SStableFileMeta>) -> Result<(Vec<SStableFileMeta>, usize)> {
+    // compact n-1 level sstable to this level, build new sstable,
+    // level is unchanged in compact
+    // return (new_sstable in current level ,remove_sstable  start_position in current level)
+    pub fn compact_sstable(&self, mut input_sstables_metas: Vec<SStableFileMeta>) -> Result<CompactSStableResult> {
         let start_key: Key = input_sstables_metas.iter().map(|sstable| sstable.start_key()).min().unwrap();
         let end_key: Key = input_sstables_metas.iter().map(|sstable| sstable.last_key()).max().unwrap();
         // find key overlap sstable
         let key_overlap_res = self.key_overlap(&start_key, &end_key);
         if key_overlap_res.is_none() {
-            return Ok((input_sstables_metas, 0));
+            return Ok(CompactSStableResult { remove_sstables: vec![], add_sstables: input_sstables_metas, position: 0 });
         }
         let (mut sstable_overlap, start_position) = key_overlap_res.unwrap();
-        input_sstables_metas.append(&mut sstable_overlap);
+        input_sstables_metas.append(&mut sstable_overlap.clone());
 
         let mut input_sstables = Vec::new();
         for sstable_file_meta in input_sstables_metas {
@@ -197,7 +197,7 @@ impl Level {
                 break;
             }
         }
-        Ok((res, start_position))
+        Ok(CompactSStableResult { remove_sstables: sstable_overlap, add_sstables: res, position: start_position })
     }
 
     pub fn copy_sstable_meta(&self) -> Vec<SStableFileMeta> {
@@ -212,10 +212,8 @@ impl Level {
         self.sstable_file_metas.len()
     }
 
-    // roundround pick in level n>0
-    pub fn pick_file_to_compact(&self) -> Result<SSTable> {
-        let sstable_meta = self.find_oldest_sstable();
-        self.get_sstable(sstable_meta)
+    pub fn pick_file_to_compact(&self) -> &SStableFileMeta {
+        self.find_oldest_sstable()
     }
 
     fn find_oldest_sstable(&self) -> &SStableFileMeta {
@@ -338,8 +336,8 @@ mod test {
         let res = level.find_oldest_sstable();
         assert_eq!(res.file_id, 0);
         assert_eq!(res.start_key, Key::new("100"));
-        let res=level.pick_file_to_compact().unwrap();
-        assert_eq!(res.start_key(), &Key::new("100"));
+        let res = level.pick_file_to_compact();
+        assert_eq!(res.start_key(), Key::new("100"));
     }
 
     #[test]
@@ -420,7 +418,7 @@ mod test {
 
         let mut level = Level::new(vec![c_file_meta, d_file_meta, e_file_meta], home_path.clone(), Level::new_cache(10), file_manager);
 
-        let (mut file_sstable,position) = level.compact_sstable(vec![a_file_meta, b_file_meta]).unwrap();
+        let mut file_sstable = level.compact_sstable(vec![a_file_meta, b_file_meta]).unwrap().add_sstables;
         assert_eq!(file_sstable.len(), 1);
         let file_id = file_sstable.pop().unwrap().file_id;
         let mut file = FileStorageManager::open_file(&home_path, &file_id).unwrap();

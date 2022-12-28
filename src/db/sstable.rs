@@ -76,7 +76,7 @@ impl<'a> Iterator for SStableIter<'a> {
 }
 
 impl SSTable {
-    pub const SSTABLE_SIZE_LIMIT: usize = 1024 * 1024 * 4;
+    pub const SSTABLE_SIZE_LIMIT: usize = 1024 * 1024 * 2;
     pub fn get_meta_from_file(file: &mut File) -> Result<SStableBlockMeta> {
         file.seek(SeekFrom::End(-8))?;
         let meta_offset = file.read_u64::<LittleEndian>()?;

@@ -32,6 +32,7 @@ mod common;
 mod file_storage;
 mod meta_log;
 mod memtable_log;
+mod config;
 
 mod version;
 
@@ -84,7 +85,7 @@ fn get_current_data(data: &ThreadSafeData) -> (Arc<Memtable>, Option<Arc<Memtabl
 }
 
 impl DBClient {
-    pub fn get(&self, key: &Key) -> Result<Option<Value>, MyError> {
+    pub fn get(&self, key: &Key) -> Result<Option<Value>> {
         let (memtable, immutable_memtable, version) = get_current_data(&self.data);
         // search in current memtable
         let res = memtable.get(&key);
@@ -102,7 +103,7 @@ impl DBClient {
 
         // search in current version
         let res = version.get(&key);
-        Ok(res)
+        res
     }
 
     pub fn put(&mut self, key: &Key, value: Value) -> Result<()> {
@@ -197,11 +198,12 @@ impl DBServer {
         }
     }
 
-    fn compact(data: &mut ThreadSafeData, file_manager: &mut FileStorageManager, compact_condition_pair: Arc<(Mutex<bool>, Condvar)>, mut meta_log: &mut MetaLog) {
+    fn compact(data: &mut ThreadSafeData, file_manager: &mut FileStorageManager, compact_condition_pair: Arc<(Mutex<bool>, Condvar)>, mut meta_log: &mut MetaLog) -> Result<()> {
         let (_, immutable_memtable_option, version) = get_current_data(&data);
         //     append sstable to level 0
         let imm_memtable = immutable_memtable_option.expect("must exits");
-        let (new_version, level_change) = version.add_memtable_to_level_0(imm_memtable.as_ref());
+        let level_change = version.add_memtable_to_level_0(imm_memtable.as_ref())?;
+        let new_version = version.apply_change(level_change.clone());
         let new_version_arc = Arc::new(new_version);
         // write level change to meta log
         Self::save_level_change_to_meta_log(&mut meta_log, &level_change);
@@ -222,17 +224,19 @@ impl DBServer {
         *compact_is_finish = true;
         cvar.notify_all();
         //     check level from 0 to n, do one level compact
-        let compact_res = new_version_arc.compact_one_level();
-        if let Some((version_after_compact_level, LevelChange)) = compact_res {
+        let compact_res = new_version_arc.compact_one_level()?;
+        if let Some(LevelChange) = compact_res {
             Self::save_level_change_to_meta_log(&mut meta_log, &level_change);
             {
                 let mut lock_result = data.write().unwrap();
                 let (_, _, version) = lock_result.deref_mut();
                 let mut v = version.lock().unwrap();
-                *v = Arc::new(version_after_compact_level);
+                let new_version=v.apply_change(level_change);
+                    * v = Arc::new(new_version);
                 //     unlock data
             }
         }
+        Ok(())
     }
 
 
