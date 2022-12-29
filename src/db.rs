@@ -211,7 +211,6 @@ impl DBServer {
             if let Ok(()) = res {
                 Self::compact(
                     &mut data,
-                    &mut file_manager,
                     compact_condition_pair.clone(),
                     &mut meta_log,
                 );
@@ -224,7 +223,6 @@ impl DBServer {
 
     fn compact(
         data: &mut ThreadSafeData,
-        file_manager: &mut FileStorageManager,
         compact_condition_pair: Arc<(Mutex<bool>, Condvar)>,
         mut meta_log: &mut MetaLog,
     ) -> Result<()> {
@@ -235,7 +233,7 @@ impl DBServer {
         let new_version = version.apply_change(level_change.clone());
         let new_version_arc = Arc::new(new_version);
         // write level change to meta log
-        Self::save_level_change_to_meta_log(&mut meta_log, &level_change);
+        Self::save_level_change_to_meta_log(&mut meta_log, &level_change)?;
         //     lock data
         {
             let mut lock_result = data.write().unwrap();
@@ -255,7 +253,7 @@ impl DBServer {
         //     check level from 0 to n, do one level compact
         let compact_res = new_version_arc.compact_one_level()?;
         if let Some(LevelChange) = compact_res {
-            Self::save_level_change_to_meta_log(&mut meta_log, &level_change);
+            Self::save_level_change_to_meta_log(&mut meta_log, &level_change)?;
             {
                 let mut lock_result = data.write().unwrap();
                 let (_, _, version) = lock_result.deref_mut();
@@ -305,7 +303,7 @@ mod test {
         //     new db
         let dir = TempDir::new().unwrap();
         let dir_path = dir.path();
-        let mut db_server = DBServer::new(dir_path).unwrap();
+        let db_server = DBServer::new(dir_path).unwrap();
         //     create 3 thread
         let mut handles = Vec::new();
         for i in 0..3 {
@@ -316,7 +314,7 @@ mod test {
                     db_client.put(
                         &Key::from(i.to_string().as_bytes()),
                         Value::new(&i.to_string()),
-                    );
+                    ).unwrap();
                 }
                 for i in 0..1000 {
                     let value = db_client
@@ -330,8 +328,8 @@ mod test {
         }
         while handles.len() > 0 {
             let handle = handles.pop().unwrap();
-            handle.join();
+            handle.join().unwrap();
         }
-        db_server.close();
+        db_server.close().unwrap();
     }
 }
