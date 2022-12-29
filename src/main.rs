@@ -1,4 +1,8 @@
-use std::cell::RefCell;
+
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
+
 use std::fs::File;
 use std::rc::Rc;
 use std::sync::{mpsc, Arc, Mutex};
@@ -13,8 +17,8 @@ fn work(id: i32) {
     let mut f = File::create(id.to_string()).unwrap();
     loop {
         a = a * 2.2 * 3.2 / 1.2;
-        f.write_u8(12);
-        f.sync_all();
+        f.write_u8(12).unwrap();
+        f.sync_all().unwrap();
     }
 }
 
@@ -36,19 +40,4 @@ struct TestThread {
 }
 
 fn main() {
-    let x = Arc::new(Mutex::new(Arc::new(0)));
-    let mut a = RefCell::new(Rc::new(3));
-    let mut d = a.borrow_mut();
-    *d = Rc::new(4);
-    let data = Arc::new(Mutex::new(0));
-    for i in 1..2 {
-        let m = x.clone();
-        let clone = data.clone();
-        thread::spawn(move || {
-            let h = m.lock().unwrap();
-            foo(clone);
-        });
-    }
-    foo(data);
-    // std::thread::sleep(std::time::Duration::from_secs(10000));
 }

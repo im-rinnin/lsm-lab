@@ -45,9 +45,9 @@ type ThreadSafeData = Arc<
     )>,
 >;
 
-const level_0_limit: usize = 8;
-const memtable_len_limit: usize = 4 * 1024 * 1024;
-const meta_log_file_name: &str = "meta";
+const LEVEL_0_LIMIT: usize = 8;
+const MEMTABLE_LEN_LIMIT: usize = 4 * 1024 * 1024;
+const META_LOG_FILE_NAME: &str = "meta";
 
 // todo thread safe design multiple thread access
 pub struct DBServer {
@@ -115,7 +115,7 @@ impl DBClient {
             value,
             finish: self.finish_notify_sender.clone(),
         };
-        self.write_request_sender.send(write_request);
+        self.write_request_sender.send(write_request).unwrap();
         let _ = self.finish_notify_receiver.recv()?;
         Ok(())
     }
@@ -158,12 +158,12 @@ impl DBServer {
         write_request_channel: Receiver<WriteRequest>,
         compact_condition_pair: Arc<(Mutex<bool>, Condvar)>,
     ) -> Result<()> {
-        const write_size_limit: usize = 100;
+        const WRITE_SIZE_LIMIT: usize = 100;
         let mut write_size_count = 0;
         loop {
             let lock_result = data.write().unwrap();
             let (memtable_ref, b, c) = lock_result.deref();
-            let mut memtable = (*memtable_ref).lock().unwrap().clone();
+            let memtable = (*memtable_ref).lock().unwrap().clone();
             drop(lock_result);
 
             // write data to memtable
@@ -173,7 +173,7 @@ impl DBServer {
                 write_size_count += request_size;
 
                 memtable.insert(&request.key, &request.value);
-                if write_size_count > write_size_limit {
+                if write_size_count > WRITE_SIZE_LIMIT {
                     break;
                 }
             }
@@ -201,11 +201,11 @@ impl DBServer {
 
     fn compact_routine(
         mut data: ThreadSafeData,
-        mut file_manager: FileStorageManager,
+       file_manager: FileStorageManager,
         compact_condition_pair: Arc<(Mutex<bool>, Condvar)>,
         mut meta_log: MetaLog,
         start_compact: Receiver<()>,
-    ) {
+    ) ->Result<()>{
         loop {
             let res = start_compact.recv();
             if let Ok(()) = res {
@@ -213,10 +213,10 @@ impl DBServer {
                     &mut data,
                     compact_condition_pair.clone(),
                     &mut meta_log,
-                );
+                )?;
             } else {
                 //     todo log exit
-                return;
+                return Ok(());
             }
         }
     }
@@ -252,7 +252,7 @@ impl DBServer {
         cvar.notify_all();
         //     check level from 0 to n, do one level compact
         let compact_res = new_version_arc.compact_one_level()?;
-        if let Some(LevelChange) = compact_res {
+        if let Some(level_change) = compact_res {
             Self::save_level_change_to_meta_log(&mut meta_log, &level_change)?;
             {
                 let mut lock_result = data.write().unwrap();

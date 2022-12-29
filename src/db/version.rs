@@ -1,4 +1,3 @@
-#![feature(option_get_or_insert_default)]
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
@@ -12,7 +11,6 @@ use crate::db::config;
 use crate::db::config::Config;
 use crate::db::file_storage::{FileId, FileStorageManager, ThreadSafeFileManager};
 use crate::db::key::Key;
-use crate::db::level::LevelChange::{level_compact, memtable_compact};
 use crate::db::level::{
     CompactSStableResult, Level, LevelChange, SStableFileMeta, ThreadSafeSSTableMetaCache,
 };
@@ -97,7 +95,7 @@ impl Version {
         let sstable_for_compact = level.pick_file_to_compact();
         let next_level_option = self.levels.get(&(level_number + 1));
         if next_level_option.is_none() {
-            let level_change = LevelChange::level_compact {
+            let level_change = LevelChange::LevelCompact {
                 compact_from_level: level_number,
                 compact_sstable: sstable_for_compact.clone(),
                 compact_result: CompactSStableResult {
@@ -112,7 +110,7 @@ impl Version {
         let next_level = next_level_option.unwrap();
         // pick files  do compact
         let compact_res = next_level.compact_sstable(vec![sstable_for_compact.clone()])?;
-        let level_change = LevelChange::level_compact {
+        let level_change = LevelChange::LevelCompact {
             compact_from_level: level_number,
             compact_sstable: sstable_for_compact.clone(),
             compact_result: compact_res,
@@ -152,7 +150,7 @@ impl Version {
         let sstable = SSTable::from_iter_with_file_limit(&mut iter, file, 0)?;
         let sstable_meta = SStableFileMeta::from(&sstable, file_id);
         assert!(!iter.has_next());
-        let level_change = LevelChange::memtable_compact {
+        let level_change = LevelChange::MemtableCompact {
             sstable_file_metas: sstable_meta,
         };
         Ok(level_change)
@@ -221,7 +219,7 @@ impl Version {
         level_change: LevelChange,
     ) {
         match level_change {
-            LevelChange::level_compact {
+            LevelChange::LevelCompact {
                 compact_from_level,
                 compact_sstable,
                 compact_result,
@@ -245,8 +243,8 @@ impl Version {
                     next_level_metas.insert(compact_result.position, add_sstables.pop().unwrap())
                 }
             }
-            LevelChange::memtable_compact {
-                sstable_file_metas: mut sstable_file_meta,
+            LevelChange::MemtableCompact {
+                sstable_file_metas: sstable_file_meta,
             } => {
                 let metas: &mut Vec<SStableFileMeta> =
                     Self::get_or_default(&mut level_sstable_file_metas, 0);
@@ -339,19 +337,19 @@ mod test {
         let sstable_b = build_sstable_with_special_value(15, 20, 1, map, file_b);
         let b_meta = SStableFileMeta::from(&sstable_b, file_b_id);
 
-        let level_0_level_change_b = LevelChange::memtable_compact {
+        let level_0_level_change_b = LevelChange::MemtableCompact {
             sstable_file_metas: b_meta,
         };
-        let level_0_level_change_a = LevelChange::memtable_compact {
+        let level_0_level_change_a = LevelChange::MemtableCompact {
             sstable_file_metas: a_meta,
         };
-        let level_0_level_change_c = LevelChange::memtable_compact {
+        let level_0_level_change_c = LevelChange::MemtableCompact {
             sstable_file_metas: c_meta.clone(),
         };
-        let level_0_level_change_d = LevelChange::memtable_compact {
+        let level_0_level_change_d = LevelChange::MemtableCompact {
             sstable_file_metas: d_meta.clone(),
         };
-        let level_1_level_change_c = LevelChange::level_compact {
+        let level_1_level_change_c = LevelChange::LevelCompact {
             compact_from_level: 0,
             compact_sstable: c_meta.clone(),
             compact_result: CompactSStableResult {
@@ -360,7 +358,7 @@ mod test {
                 position: 0,
             },
         };
-        let level_1_level_change_d = LevelChange::level_compact {
+        let level_1_level_change_d = LevelChange::LevelCompact {
             compact_from_level: 0,
             compact_sstable: d_meta.clone(),
             compact_result: CompactSStableResult {
@@ -403,7 +401,7 @@ level: 1,data file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \
         assert_eq!(version.depth(), 2);
 
         let dir = tempdir().unwrap();
-        let mut file_manager = FileStorageManager::new(dir.path());
+        let  file_manager = FileStorageManager::new(dir.path());
 
         let meta_log = vec![];
         let mut iter = meta_log.into_iter();
@@ -422,7 +420,7 @@ level: 1,data file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \
     pub fn test_add_memtable() {
         use crate::db::sstable::{SSTable, SStableBlockMeta, SStableIter};
         let version = build_level().unwrap();
-        let mut memtable = Memtable::new();
+        let memtable = Memtable::new();
         memtable.insert(&Key::new("12"), &Value::new("mem"));
         memtable.insert(&Key::new("7"), &Value::new("mem"));
 

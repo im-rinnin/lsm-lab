@@ -21,7 +21,7 @@ impl Memtable {
     }
 
     pub fn iter(&self) -> MemtableIter {
-        let mut iter = self.hash_map.iter();
+        let iter = self.hash_map.iter();
         let mut heap = BinaryHeap::new();
         for i in iter {
             let p: (&Key, &ValueWithTag) = i.pair();
@@ -97,7 +97,7 @@ mod test {
 
     #[test]
     fn test_memtable_iter() {
-        let mut memtable = Memtable::new();
+        let memtable = Memtable::new();
         memtable.insert(&Key::new("a"), &Value::new("a"));
         memtable.insert(&Key::new("c"), &Value::new("c"));
         memtable.insert(&Key::new("b"), &Value::new("b"));

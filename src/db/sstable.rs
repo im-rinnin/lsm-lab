@@ -154,7 +154,7 @@ impl SSTable {
     /// use BufWriter if possible
     pub fn from_iter(
         kv_iters: &mut dyn Iterator<Item = KVIterItem>,
-        mut file: File,
+        file: File,
     ) -> Result<SSTable> {
         Self::from_iter_with_file_limit(kv_iters, file, Self::SSTABLE_SIZE_LIMIT)
     }
@@ -286,7 +286,7 @@ pub mod test {
         end_number: usize,
         step: usize,
         manual_set_value: HashMap<usize, ValueWithTag>,
-        mut file: File,
+        file: File,
     ) -> SSTable {
         let (data, output) = create_data(start_number, end_number, step, manual_set_value);
 
@@ -343,7 +343,7 @@ pub mod test {
         let mut it = data
             .iter()
             .map(|e| (KeySlice::new(e.0.data()), Some(ValueSlice::new(e.1.data()))));
-        let mut c = tempfile::tempfile().unwrap();
+        let c = tempfile::tempfile().unwrap();
         let sstable = SSTable::from_iter(&mut it, c).unwrap();
 
         // check sstable
@@ -393,7 +393,7 @@ pub mod test {
         let mut sstable_2_iter = sstable_2.iter().unwrap();
 
         let mut sorted_kv_iter = SortedKVIter::new(vec![&mut sstable_1_iter, &mut sstable_2_iter]);
-        let mut sstable_3_file = tempfile::tempfile().unwrap();
+        let sstable_3_file = tempfile::tempfile().unwrap();
         let sstable_3 = SSTable::from_iter(&mut sorted_kv_iter, sstable_3_file).unwrap();
         let sstable_3_on_file_iter = sstable_3.iter().unwrap();
         for (i, data) in sstable_3_on_file_iter.enumerate() {
@@ -424,7 +424,7 @@ pub mod test {
         let dir = tempdir().unwrap();
         let path = dir.into_path();
         let mut file_manager = FileStorageManager::new(path.as_path());
-        let (mut sstable_2_file, id, _) = file_manager.new_file().unwrap();
+        let (sstable_2_file, id, _) = file_manager.new_file().unwrap();
         let sstable_2 = SSTable::from_iter(&mut iter_1, sstable_2_file).unwrap();
         let sstable_2_meta = sstable_2.block_metadata();
 

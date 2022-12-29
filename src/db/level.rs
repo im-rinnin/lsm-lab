@@ -31,10 +31,10 @@ pub struct Level {
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub enum LevelChange {
     // add new sstable to level start from position_in_level,sstable order is same as sstable_file_metas
-    memtable_compact {
+    MemtableCompact {
         sstable_file_metas: SStableFileMeta,
     },
-    level_compact {
+    LevelCompact {
         // compact 1 to 2, compact_from_leve is 1
         compact_from_level: usize,
         compact_sstable: SStableFileMeta,
@@ -169,7 +169,7 @@ impl Level {
         let mut iter = memtable.iter();
         let mut res = Vec::new();
         loop {
-            let (mut file, file_id, _) = file_manager.new_file()?;
+            let (file, file_id, _) = file_manager.new_file()?;
             let sstable = SSTable::from_iter(&mut iter, file)?;
             res.push(SStableFileMeta::from(&sstable, file_id));
             if !iter.has_next() {
@@ -205,7 +205,7 @@ impl Level {
                 position: 0,
             });
         }
-        let (mut sstable_overlap, start_position) = key_overlap_res.unwrap();
+        let (sstable_overlap, start_position) = key_overlap_res.unwrap();
         input_sstables_metas.append(&mut sstable_overlap.clone());
 
         let mut input_sstables = Vec::new();
@@ -238,7 +238,7 @@ impl Level {
         let mut sorted_iter = SortedKVIter::new(sstable_iters);
         let mut res = Vec::new();
         loop {
-            let (mut file, file_id, _) = self.file_manager.lock().unwrap().new_file()?;
+            let (file, file_id, _) = self.file_manager.lock().unwrap().new_file()?;
             let sstable = SSTable::from_iter(&mut sorted_iter, file)?;
             let meta = SStableFileMeta::from(&sstable, file_id);
             res.push(meta);
@@ -486,7 +486,7 @@ mod test {
     fn test_compact() {
         let dir = tempdir().unwrap();
         let home_path = PathBuf::from(dir.path());
-        let mut file_manager = FileStorageManager::new_thread_safe_manager(dir.into_path());
+        let file_manager = FileStorageManager::new_thread_safe_manager(dir.into_path());
 
         // a [100,110) delete 109 set 105 to X b[108,115] set 113 to Z set 109 to Z
         // c [105,108) ,d [110,115) set 112 to Y, e[122,124)
@@ -495,32 +495,32 @@ mod test {
         special_value_map.insert(109, None);
         special_value_map.insert(105, Some(Value::new("X")));
 
-        let (mut a_file, a_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
+        let (a_file, a_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
         let a = build_sstable_with_special_value(100, 110, 1, special_value_map, a_file);
         let a_file_meta = SStableFileMeta::from(&a, a_file_id);
 
         let mut special_value_map = HashMap::new();
         special_value_map.insert(109, Some(Value::new("Z")));
         special_value_map.insert(113, Some(Value::new("Z")));
-        let (mut b_file, b_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
+        let (b_file, b_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
         let b = build_sstable_with_special_value(108, 115, 1, special_value_map, b_file);
         let b_file_meta = SStableFileMeta::from(&b, b_file_id);
 
-        let (mut c_file, c_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
+        let (c_file, c_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
         let c = build_sstable(105, 108, 1, c_file);
         let c_file_meta = SStableFileMeta::from(&c, c_file_id);
 
         let mut special_value_map = HashMap::new();
         special_value_map.insert(112, Some(Value::new("Y")));
-        let (mut d_file, d_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
+        let (d_file, d_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
         let d = build_sstable_with_special_value(110, 115, 1, special_value_map, d_file);
         let d_file_meta = SStableFileMeta::from(&d, d_file_id);
 
-        let (mut e_file, e_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
+        let (e_file, e_file_id, _) = file_manager.lock().unwrap().new_file().unwrap();
         let e = build_sstable(122, 124, 1, e_file);
         let e_file_meta = SStableFileMeta::from(&e, e_file_id);
 
-        let mut level = Level::new(
+        let level = Level::new(
             vec![c_file_meta, d_file_meta, e_file_meta],
             home_path.clone(),
             Level::new_cache(10),
@@ -533,7 +533,7 @@ mod test {
             .add_sstables;
         assert_eq!(file_sstable.len(), 1);
         let file_id = file_sstable.pop().unwrap().file_id;
-        let mut file = FileStorageManager::open_file(&home_path, &file_id).unwrap();
+        let file = FileStorageManager::open_file(&home_path, &file_id).unwrap();
         let sstable = SSTable::from_file(file).unwrap();
         let expect = "(key: 100,value: 100)(key: 101,value: 101)(key: 102,value: 102)(key: 103,value: 103)(key: 104,value: 104)(key: 105,value: X)(key: 106,value: 106)(key: 107,value: 107)(key: 108,value: 108)(key: 109,value: None)(key: 110,value: 110)(key: 111,value: 111)(key: 112,value: 112)(key: 113,value: Z)(key: 114,value: 114)";
         assert_eq!(sstable.to_string(), expect);
@@ -541,7 +541,7 @@ mod test {
 
     #[test]
     fn test_write_memtable_to_sstable() {
-        let mut memtable = Memtable::new();
+        let memtable = Memtable::new();
         for i in 0..10 {
             memtable.insert(
                 &Key::from(i.to_string().as_bytes()),
