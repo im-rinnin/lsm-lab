@@ -66,12 +66,14 @@ impl Block {
 
     // value is none if is deleted
     fn read_kv_at(&self, position: &mut usize) -> Result<(&[u8], Option<&[u8]>)> {
-        let key_size = (&self.content[*position..*position + Self::SIZE_LEN]).read_u16::<LittleEndian>()? as usize;
+        let key_size = (&self.content[*position..*position + Self::SIZE_LEN])
+            .read_u16::<LittleEndian>()? as usize;
         *position += Self::SIZE_LEN;
 
         let key_content = &self.content[*position..*position + key_size];
         *position += key_size;
-        let value_size = (&self.content[*position..*position + Self::SIZE_LEN]).read_u16::<LittleEndian>()? as usize;
+        let value_size = (&self.content[*position..*position + Self::SIZE_LEN])
+            .read_u16::<LittleEndian>()? as usize;
         if value_size > 0 {
             *position += Self::SIZE_LEN;
             let value_content = &self.content[*position..*position + value_size];
@@ -84,7 +86,10 @@ impl Block {
     }
 
     pub fn into_iter(self) -> BlockIter {
-        BlockIter { block: self, next_position: 0 }
+        BlockIter {
+            block: self,
+            next_position: 0,
+        }
     }
 }
 
@@ -122,7 +127,13 @@ impl BlockMeta {
         self.size
     }
     pub fn new(start_key: Key, k: Key, number: usize, size: usize, block_offset: u64) -> Self {
-        BlockMeta { start_key, last_key: k, entry_number: number, size, block_offset }
+        BlockMeta {
+            start_key,
+            last_key: k,
+            entry_number: number,
+            size,
+            block_offset,
+        }
     }
 
     // [key_size,key_content,entry_number]
@@ -152,7 +163,13 @@ impl BlockMeta {
         let size = reader.read_u16::<LittleEndian>()? as usize;
         let entry_number = reader.read_u16::<LittleEndian>()? as usize;
 
-        Ok(BlockMeta { start_key, last_key, block_offset, size, entry_number })
+        Ok(BlockMeta {
+            start_key,
+            last_key,
+            block_offset,
+            size,
+            entry_number,
+        })
     }
 
     pub fn build_block_metas(data: &mut dyn Read, number: usize) -> Result<Vec<BlockMeta>> {
@@ -176,7 +193,13 @@ impl BlockMeta {
             let size = data.read_u16::<LittleEndian>()?;
             let entry_number = data.read_u16::<LittleEndian>()?;
 
-            result.push(BlockMeta::new(start_key, last_key, entry_number as usize, size as usize, block_offset as u64));
+            result.push(BlockMeta::new(
+                start_key,
+                last_key,
+                entry_number as usize,
+                size as usize,
+                block_offset as u64,
+            ));
         }
         Ok(result)
     }
@@ -184,7 +207,9 @@ impl BlockMeta {
 
 impl BlockBuilder {
     pub fn new() -> Self {
-        BlockBuilder { content: Vec::new() }
+        BlockBuilder {
+            content: Vec::new(),
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -192,14 +217,18 @@ impl BlockBuilder {
     }
 
     pub fn append(&mut self, key_slice: KeySlice, value_with_tag: ValueSliceTag) -> Result<()> {
-        self.content.write_u16::<LittleEndian>(key_slice.len() as u16)?;
+        self.content
+            .write_u16::<LittleEndian>(key_slice.len() as u16)?;
         unsafe {
             self.content.write(key_slice.data())?;
         }
 
         if let Some(value_slice) = value_with_tag {
-            self.content.write_u16::<LittleEndian>(value_slice.len() as u16)?;
-            unsafe { self.content.write(value_slice.data())?; }
+            self.content
+                .write_u16::<LittleEndian>(value_slice.len() as u16)?;
+            unsafe {
+                self.content.write(value_slice.data())?;
+            }
         } else {
             self.content.write_u16::<LittleEndian>(0)?;
         }
@@ -251,8 +280,9 @@ pub mod test {
             } else {
                 Some(ValueSlice::new(number_slice))
             };
-            b_builder.append(KeySlice::new(number.to_string().as_bytes()),
-                             value_slice).unwrap();
+            b_builder
+                .append(KeySlice::new(number.to_string().as_bytes()), value_slice)
+                .unwrap();
         }
         b_builder.flush(&mut content).unwrap();
         assert_eq!(b_builder.len(), 0);

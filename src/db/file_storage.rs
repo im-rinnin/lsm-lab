@@ -30,20 +30,38 @@ impl FileStorageManager {
                 Ok(p) => {
                     let p: PathBuf = p.path();
                     let file_name = p.file_name().ok_or(Error::msg("file_name not found"))?;
-                    let file_id = file_name.to_str().ok_or(Error::msg("file name to id fail"))?.parse::<u32>().unwrap();
+                    let file_id = file_name
+                        .to_str()
+                        .ok_or(Error::msg("file name to id fail"))?
+                        .parse::<u32>()
+                        .unwrap();
                     file_names.push(file_id);
                 }
-                Err(e) => { return Err(Error::new(e)); }
+                Err(e) => {
+                    return Err(Error::new(e));
+                }
             }
-        };
+        }
         let max_file_id = file_names.iter().max().unwrap();
-        Ok(FileStorageManager { home_path, next_file_id: max_file_id + 1, all_file_ids: file_names })
+        Ok(FileStorageManager {
+            home_path,
+            next_file_id: max_file_id + 1,
+            all_file_ids: file_names,
+        })
     }
     pub fn new(home_path: &Path) -> Self {
-        FileStorageManager { home_path:PathBuf::from(home_path), next_file_id: START_ID, all_file_ids: Vec::new() }
+        FileStorageManager {
+            home_path: PathBuf::from(home_path),
+            next_file_id: START_ID,
+            all_file_ids: Vec::new(),
+        }
     }
     pub fn new_thread_safe_manager(home_path: PathBuf) -> ThreadSafeFileManager {
-        Arc::new(Mutex::new(FileStorageManager { home_path, next_file_id: START_ID, all_file_ids: Vec::new() }))
+        Arc::new(Mutex::new(FileStorageManager {
+            home_path,
+            next_file_id: START_ID,
+            all_file_ids: Vec::new(),
+        }))
     }
 
     pub fn new_file(&mut self) -> Result<(File, FileId, PathBuf)> {
@@ -51,17 +69,25 @@ impl FileStorageManager {
         let path = FileStorageManager::file_path(self.home_path.as_path(), &file_id);
         self.all_file_ids.push(self.next_file_id);
         self.next_file_id += 1;
-        let res = File::options().write(true).read(true).create(true).open(path.clone())?;
+        let res = File::options()
+            .write(true)
+            .read(true)
+            .create(true)
+            .open(path.clone())?;
         Ok((res, file_id, path))
     }
     // delete all unactivated files
     pub fn prune_files(&mut self, all_active_file: HashSet<FileId>) -> Result<()> {
         for file_id in &self.all_file_ids {
             if !all_active_file.contains(file_id) {
-                fs::remove_file(FileStorageManager::file_path(self.home_path.as_path(), file_id))?;
+                fs::remove_file(FileStorageManager::file_path(
+                    self.home_path.as_path(),
+                    file_id,
+                ))?;
             }
         }
-        self.all_file_ids.retain(|file_id| all_active_file.contains(file_id));
+        self.all_file_ids
+            .retain(|file_id| all_active_file.contains(file_id));
         Ok(())
     }
 

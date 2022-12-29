@@ -11,13 +11,13 @@ pub struct Memtable {
     hash_map: DashMap<Key, ValueWithTag>,
 }
 
-pub struct MemtableIter(
-    BinaryHeap<Reverse<(KeySlice, ValueSliceTag)>>
-);
+pub struct MemtableIter(BinaryHeap<Reverse<(KeySlice, ValueSliceTag)>>);
 
 impl Memtable {
     pub fn new() -> Self {
-        Memtable { hash_map: DashMap::new() }
+        Memtable {
+            hash_map: DashMap::new(),
+        }
     }
 
     pub fn iter(&self) -> MemtableIter {
@@ -39,7 +39,7 @@ impl Memtable {
     pub fn insert(&self, key: &Key, value: &Value) {
         self.hash_map.insert(key.clone(), Some(value.clone()));
     }
-    pub fn get<>(&self, key: &Key) -> Option<Value> {
+    pub fn get(&self, key: &Key) -> Option<Value> {
         if let Some(i) = self.hash_map.get(key) {
             if let Some(j) = &(*i) {
                 return Some(j.clone());

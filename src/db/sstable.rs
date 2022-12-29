@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
 use std::io::SeekFrom::Start;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::common::{KVIterItem, ValueSliceTag};
 use crate::db::file_storage::FileStorageManager;
-use crate::db::key::{Key, KEY_SIZE_LIMIT, KeySlice};
+use crate::db::key::{Key, KeySlice, KEY_SIZE_LIMIT};
 use crate::db::level::SStableFileMeta;
-use crate::db::sstable::block::{Block, BLOCK_SIZE, BlockBuilder, BlockIter, BlockMeta};
+use crate::db::sstable::block::{Block, BlockBuilder, BlockIter, BlockMeta, BLOCK_SIZE};
 use crate::db::value::Value;
 
 mod block;
@@ -53,7 +53,11 @@ impl<'a> SStableIter<'a> {
         assert!(sstable.sstable_metas.block_metas.len() > 0);
         let block = sstable.read_block(0)?;
         let block_iter = block.into_iter();
-        Ok(SStableIter { block_iter, sstable, next_block_number: 1 })
+        Ok(SStableIter {
+            block_iter,
+            sstable,
+            next_block_number: 1,
+        })
     }
 }
 
@@ -92,10 +96,16 @@ impl SSTable {
     }
     pub fn from_file(mut file: File) -> Result<Self> {
         let sstable_metas = SSTable::get_meta_from_file(&mut file)?;
-        Ok(SSTable { sstable_metas: Arc::new(sstable_metas), file: RefCell::new(file) })
+        Ok(SSTable {
+            sstable_metas: Arc::new(sstable_metas),
+            file: RefCell::new(file),
+        })
     }
     pub fn from(sstable_metas: Arc<SStableBlockMeta>, file: File) -> Result<Self> {
-        Ok(SSTable { sstable_metas, file: RefCell::new(file) })
+        Ok(SSTable {
+            sstable_metas,
+            file: RefCell::new(file),
+        })
     }
 
     pub fn block_metadata(&self) -> Arc<SStableBlockMeta> {
@@ -112,9 +122,10 @@ impl SSTable {
         if self.last_key().lt(key) {
             return Ok(None);
         }
-        let block_position = self.sstable_metas.block_metas.partition_point(|meta| {
-            meta.last_key().lt(key)
-        });
+        let block_position = self
+            .sstable_metas
+            .block_metas
+            .partition_point(|meta| meta.last_key().lt(key));
         let block = self.read_block(block_position)?;
         let block_meta = &self.sstable_metas.block_metas[block_position];
         block.find(key, block_meta.entry_size())
@@ -141,12 +152,17 @@ impl SSTable {
     }
     /// build new sstable, may not use out iterator if sstable size reach limit
     /// use BufWriter if possible
-    pub fn from_iter(kv_iters: &mut dyn Iterator<Item=KVIterItem>,
-                     mut file: File) -> Result<SSTable> {
+    pub fn from_iter(
+        kv_iters: &mut dyn Iterator<Item = KVIterItem>,
+        mut file: File,
+    ) -> Result<SSTable> {
         Self::from_iter_with_file_limit(kv_iters, file, Self::SSTABLE_SIZE_LIMIT)
     }
-    pub fn from_iter_with_file_limit(kv_iters: &mut dyn Iterator<Item=KVIterItem>,
-                                     mut file: File, limit_file_size: usize) -> Result<SSTable> {
+    pub fn from_iter_with_file_limit(
+        kv_iters: &mut dyn Iterator<Item = KVIterItem>,
+        mut file: File,
+        limit_file_size: usize,
+    ) -> Result<SSTable> {
         let mut block_builder = BlockBuilder::new();
         let mut entry_count = 0;
         let mut block_metas = Vec::new();
@@ -173,8 +189,13 @@ impl SSTable {
                     if block_builder.len() > BLOCK_SIZE || next_entry.is_none() {
                         unsafe {
                             assert!(start_key.is_some());
-                            block_metas.push(BlockMeta::new(start_key.unwrap(), Key::from(key_slice.data()),
-                                                            entry_count, block_builder.len(), last_block_position));
+                            block_metas.push(BlockMeta::new(
+                                start_key.unwrap(),
+                                Key::from(key_slice.data()),
+                                entry_count,
+                                block_builder.len(),
+                                last_block_position,
+                            ));
                         }
                         start_key = None;
                         last_block_position += block_builder.len() as u64;
@@ -182,10 +203,12 @@ impl SSTable {
                         entry_count = 0;
                     }
                 }
-                None => { break; }
+                None => {
+                    break;
+                }
             }
             if limit_file_size > 0 && last_block_position >= limit_file_size as u64 {
-                info!("sstable size is {:}, reach file limit",last_block_position);
+                info!("sstable size is {:}, reach file limit", last_block_position);
                 break;
             }
         }
@@ -198,7 +221,10 @@ impl SSTable {
         sstable_writer.write_u64::<LittleEndian>(block_metas.len() as u64)?;
         sstable_writer.write_u64::<LittleEndian>(last_block_position)?;
 
-        Ok(SSTable { sstable_metas: Arc::new(SStableBlockMeta { block_metas }), file: RefCell::new(file) })
+        Ok(SSTable {
+            sstable_metas: Arc::new(SStableBlockMeta { block_metas }),
+            file: RefCell::new(file),
+        })
     }
 
     pub fn iter(&self) -> Result<SStableIter> {
@@ -255,25 +281,48 @@ pub mod test {
     use crate::db::sstable::SSTable;
     use crate::db::value::{Value, ValueSlice};
 
-    pub fn build_sstable_with_special_value(start_number: usize, end_number: usize, step: usize, manual_set_value: HashMap<usize, ValueWithTag>, mut file: File) -> SSTable {
+    pub fn build_sstable_with_special_value(
+        start_number: usize,
+        end_number: usize,
+        step: usize,
+        manual_set_value: HashMap<usize, ValueWithTag>,
+        mut file: File,
+    ) -> SSTable {
         let (data, output) = create_data(start_number, end_number, step, manual_set_value);
 
-        let mut it = data.iter().map(|e| (KeySlice::new(e.0.data()),
-                                          e.1.as_ref().map(|f| ValueSlice::new(f.data()))));
+        let mut it = data.iter().map(|e| {
+            (
+                KeySlice::new(e.0.data()),
+                e.1.as_ref().map(|f| ValueSlice::new(f.data())),
+            )
+        });
         let sstable = SSTable::from_iter(&mut it, file).unwrap();
         sstable
     }
 
     // build sstable 1->100
-    pub fn build_sstable(start_number: usize, end_number: usize, step: usize, file: File) -> SSTable {
+    pub fn build_sstable(
+        start_number: usize,
+        end_number: usize,
+        step: usize,
+        file: File,
+    ) -> SSTable {
         build_sstable_with_special_value(start_number, end_number, step, HashMap::new(), file)
     }
 
-    fn create_data(start_number: usize, end_number: usize, step: usize, manual_set_value: HashMap<usize, ValueWithTag>) -> (Vec<(Key, ValueWithTag)>, Vec<u8>) {
+    fn create_data(
+        start_number: usize,
+        end_number: usize,
+        step: usize,
+        manual_set_value: HashMap<usize, ValueWithTag>,
+    ) -> (Vec<(Key, ValueWithTag)>, Vec<u8>) {
         let mut data = Vec::new();
         for i in (start_number..end_number).step_by(step) {
             if manual_set_value.contains_key(&i) {
-                data.push((Key::new(&i.to_string()), manual_set_value.get(&i).unwrap().clone()));
+                data.push((
+                    Key::new(&i.to_string()),
+                    manual_set_value.get(&i).unwrap().clone(),
+                ));
             } else {
                 data.push((Key::new(&i.to_string()), Some(Value::new(&i.to_string()))));
             }
@@ -291,17 +340,20 @@ pub mod test {
         }
         let output: Vec<u8> = vec![0; 20 * number];
 
-        let mut it = data.iter().map(|e| (KeySlice::new(e.0.data()),
-                                          Some(ValueSlice::new(e.1.data()))));
+        let mut it = data
+            .iter()
+            .map(|e| (KeySlice::new(e.0.data()), Some(ValueSlice::new(e.1.data()))));
         let mut c = tempfile::tempfile().unwrap();
         let sstable = SSTable::from_iter(&mut it, c).unwrap();
 
         // check sstable
         for i in 0..number {
-            assert_eq!(sstable.get(&Key::new(&i.to_string())).unwrap().unwrap(), Value::new(&i.to_string()));
+            assert_eq!(
+                sstable.get(&Key::new(&i.to_string())).unwrap().unwrap(),
+                Value::new(&i.to_string())
+            );
         }
     }
-
 
     #[test]
     fn test_stable_last_key_start_key() {
@@ -345,9 +397,7 @@ pub mod test {
         let sstable_3 = SSTable::from_iter(&mut sorted_kv_iter, sstable_3_file).unwrap();
         let sstable_3_on_file_iter = sstable_3.iter().unwrap();
         for (i, data) in sstable_3_on_file_iter.enumerate() {
-            unsafe {
-                assert_eq!(from_utf8(data.0.data()).unwrap(), i.to_string())
-            }
+            unsafe { assert_eq!(from_utf8(data.0.data()).unwrap(), i.to_string()) }
         }
     }
 
@@ -357,7 +407,10 @@ pub mod test {
         let mut file_manager = FileStorageManager::new(dir.path());
         let (file, _, _) = file_manager.new_file().unwrap();
         let sstable = build_sstable(1, 5, 1, file);
-        assert_eq!(sstable.to_string(), "(key: 1,value: 1)(key: 2,value: 2)(key: 3,value: 3)(key: 4,value: 4)");
+        assert_eq!(
+            sstable.to_string(),
+            "(key: 1,value: 1)(key: 2,value: 2)(key: 3,value: 3)(key: 4,value: 4)"
+        );
     }
 
     #[test]
@@ -367,7 +420,6 @@ pub mod test {
         let (file, _, _) = file_manager.new_file().unwrap();
         let sstable_1 = build_sstable(1, 10, 2, file);
         let mut iter_1 = sstable_1.iter().unwrap();
-
 
         let dir = tempdir().unwrap();
         let path = dir.into_path();

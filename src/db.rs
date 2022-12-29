@@ -1,13 +1,13 @@
-use std::{sync, thread};
 use std::borrow::{Borrow, BorrowMut};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::rc::Rc;
-use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
+use std::{sync, thread};
 
 use anyhow::Result;
 use serde_json::{from_str, to_string};
@@ -23,23 +23,27 @@ use crate::db::meta_log::MetaLog;
 use crate::db::sstable::SSTable;
 use crate::db::version::Version;
 
-pub mod key;
-pub mod value;
-mod sstable;
-mod memtable;
-mod level;
 mod common;
-mod file_storage;
-mod meta_log;
-mod memtable_log;
 mod config;
+mod file_storage;
+pub mod key;
+mod level;
+mod memtable;
+mod memtable_log;
+mod meta_log;
+mod sstable;
+pub mod value;
 
 mod version;
 
-
 // (memtable,immutable_memtable,version)
-type ThreadSafeData = Arc<RwLock<(Arc<Mutex<Arc<Memtable>>>, Option<Arc<Memtable>>, Arc<Mutex<Arc<Version>>>)>>;
-
+type ThreadSafeData = Arc<
+    RwLock<(
+        Arc<Mutex<Arc<Memtable>>>,
+        Option<Arc<Memtable>>,
+        Arc<Mutex<Arc<Version>>>,
+    )>,
+>;
 
 const level_0_limit: usize = 8;
 const memtable_len_limit: usize = 4 * 1024 * 1024;
@@ -65,7 +69,6 @@ pub struct WriteRequest {
     value: Value,
     finish: Sender<()>,
 }
-
 
 // todo use myerror create
 #[derive(Debug)]
@@ -107,7 +110,11 @@ impl DBClient {
     }
 
     pub fn put(&mut self, key: &Key, value: Value) -> Result<()> {
-        let write_request = WriteRequest { key: key.clone(), value, finish: self.finish_notify_sender.clone() };
+        let write_request = WriteRequest {
+            key: key.clone(),
+            value,
+            finish: self.finish_notify_sender.clone(),
+        };
         self.write_request_sender.send(write_request);
         let _ = self.finish_notify_receiver.recv()?;
         Ok(())
@@ -138,13 +145,19 @@ impl DBServer {
         todo!()
     }
 
-    fn save_level_change_to_meta_log(meta_log: &mut MetaLog, level_change: &LevelChange) -> Result<()> {
+    fn save_level_change_to_meta_log(
+        meta_log: &mut MetaLog,
+        level_change: &LevelChange,
+    ) -> Result<()> {
         let data = serde_json::to_string(level_change)?;
         meta_log.add_data(data.as_bytes())
     }
 
-
-    fn write_routine(data: ThreadSafeData, write_request_channel: Receiver<WriteRequest>, compact_condition_pair: Arc<(Mutex<bool>, Condvar)>) -> Result<()> {
+    fn write_routine(
+        data: ThreadSafeData,
+        write_request_channel: Receiver<WriteRequest>,
+        compact_condition_pair: Arc<(Mutex<bool>, Condvar)>,
+    ) -> Result<()> {
         const write_size_limit: usize = 100;
         let mut write_size_count = 0;
         loop {
@@ -186,11 +199,22 @@ impl DBServer {
         }
     }
 
-    fn compact_routine(mut data: ThreadSafeData, mut file_manager: FileStorageManager, compact_condition_pair: Arc<(Mutex<bool>, Condvar)>, mut meta_log: MetaLog, start_compact: Receiver<()>) {
+    fn compact_routine(
+        mut data: ThreadSafeData,
+        mut file_manager: FileStorageManager,
+        compact_condition_pair: Arc<(Mutex<bool>, Condvar)>,
+        mut meta_log: MetaLog,
+        start_compact: Receiver<()>,
+    ) {
         loop {
             let res = start_compact.recv();
             if let Ok(()) = res {
-                Self::compact(&mut data, &mut file_manager, compact_condition_pair.clone(), &mut meta_log);
+                Self::compact(
+                    &mut data,
+                    &mut file_manager,
+                    compact_condition_pair.clone(),
+                    &mut meta_log,
+                );
             } else {
                 //     todo log exit
                 return;
@@ -198,7 +222,12 @@ impl DBServer {
         }
     }
 
-    fn compact(data: &mut ThreadSafeData, file_manager: &mut FileStorageManager, compact_condition_pair: Arc<(Mutex<bool>, Condvar)>, mut meta_log: &mut MetaLog) -> Result<()> {
+    fn compact(
+        data: &mut ThreadSafeData,
+        file_manager: &mut FileStorageManager,
+        compact_condition_pair: Arc<(Mutex<bool>, Condvar)>,
+        mut meta_log: &mut MetaLog,
+    ) -> Result<()> {
         let (_, immutable_memtable_option, version) = get_current_data(&data);
         //     append sstable to level 0
         let imm_memtable = immutable_memtable_option.expect("must exits");
@@ -231,14 +260,13 @@ impl DBServer {
                 let mut lock_result = data.write().unwrap();
                 let (_, _, version) = lock_result.deref_mut();
                 let mut v = version.lock().unwrap();
-                let new_version=v.apply_change(level_change);
-                    * v = Arc::new(new_version);
+                let new_version = v.apply_change(level_change);
+                *v = Arc::new(new_version);
                 //     unlock data
             }
         }
         Ok(())
     }
-
 
     // start routine in new() and from()
     fn init_routines(&self) {
@@ -248,16 +276,15 @@ impl DBServer {
     fn stop_routines(&self) {}
 }
 
-
 #[cfg(test)]
 mod test {
     use std::thread;
 
     use tempfile::TempDir;
 
-    use crate::db::DBServer;
     use crate::db::key::Key;
     use crate::db::value::Value;
+    use crate::db::DBServer;
 
     #[test]
     fn test_db_build_and_reopen() {
@@ -286,10 +313,16 @@ mod test {
             let handle = thread::spawn(move || {
                 //     for each thread do set from 1 to 1000, and check by get key
                 for i in 0..1000 {
-                    db_client.put(&Key::from(i.to_string().as_bytes()), Value::new(&i.to_string()));
+                    db_client.put(
+                        &Key::from(i.to_string().as_bytes()),
+                        Value::new(&i.to_string()),
+                    );
                 }
                 for i in 0..1000 {
-                    let value = db_client.get(&Key::from(i.to_string().as_bytes())).unwrap().unwrap();
+                    let value = db_client
+                        .get(&Key::from(i.to_string().as_bytes()))
+                        .unwrap()
+                        .unwrap();
                     assert_eq!(value, Value::new(&i.to_string()))
                 }
             });

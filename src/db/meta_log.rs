@@ -22,7 +22,10 @@ impl Iterator for MetaLogIter {
             return None;
         }
         let res = {
-            let len = self.file.read_u64::<LittleEndian>().expect("should has data");
+            let len = self
+                .file
+                .read_u64::<LittleEndian>()
+                .expect("should has data");
             let mut res = vec![0; len as usize];
             self.file.read(&mut res).expect("should have data");
             self.remain_data_len -= (len + 8) as usize;
@@ -31,7 +34,6 @@ impl Iterator for MetaLogIter {
         Some(res)
     }
 }
-
 
 impl MetaLog {
     pub fn new(file: File) -> Self {
@@ -49,7 +51,10 @@ impl MetaLog {
     // for db start
     pub fn to_iter(file: File) -> Result<MetaLogIter> {
         let len = file.metadata()?.len();
-        Ok(MetaLogIter { file, remain_data_len: len as usize })
+        Ok(MetaLogIter {
+            file,
+            remain_data_len: len as usize,
+        })
     }
 }
 
@@ -71,7 +76,8 @@ mod test {
         meta_log.add_data(data_a.as_slice()).unwrap();
         meta_log.add_data(data_b.as_slice()).unwrap();
 
-        let mut iter = MetaLog::to_iter(FileStorageManager::open_file(&path, &id).unwrap()).unwrap();
+        let mut iter =
+            MetaLog::to_iter(FileStorageManager::open_file(&path, &id).unwrap()).unwrap();
         let data = iter.next().unwrap().unwrap();
         assert_eq!(data, data_a);
         let data = iter.next().unwrap().unwrap();

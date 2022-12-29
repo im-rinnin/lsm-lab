@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::fs::File;
 use std::rc::Rc;
-use std::sync::{Arc, mpsc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::thread::{spawn, Thread};
 use std::time::{Duration, Instant};
@@ -35,12 +35,11 @@ struct TestThread {
     b: Arc<Mutex<i32>>,
 }
 
-
 fn main() {
-    let x=Arc::new(Mutex::new(Arc::new(0)));
+    let x = Arc::new(Mutex::new(Arc::new(0)));
     let mut a = RefCell::new(Rc::new(3));
     let mut d = a.borrow_mut();
-    *d=Rc::new(4);
+    *d = Rc::new(4);
     let data = Arc::new(Mutex::new(0));
     for i in 1..2 {
         let m = x.clone();

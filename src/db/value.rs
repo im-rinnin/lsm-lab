@@ -13,10 +13,12 @@ pub struct ValueSlice {
     size: usize,
 }
 
-
 impl ValueSlice {
     pub fn new(v: &[u8]) -> Self {
-        ValueSlice { ptr: v.as_ptr(), size: v.len() }
+        ValueSlice {
+            ptr: v.as_ptr(),
+            size: v.len(),
+        }
     }
     pub fn len(&self) -> usize {
         self.size
@@ -44,7 +46,9 @@ impl Value {
     }
     pub fn new(s: &str) -> Self {
         assert!(s.len() < VALUE_SIZE_LIMIT);
-        Value { v: Vec::from(s.as_bytes()) }
+        Value {
+            v: Vec::from(s.as_bytes()),
+        }
     }
     pub fn data(&self) -> &[u8] {
         self.v.as_slice()
@@ -54,7 +58,6 @@ impl Value {
         self.data().len()
     }
 }
-
 
 #[cfg(test)]
 mod test {

@@ -10,7 +10,6 @@ pub type ValueSliceTag = Option<ValueSlice>;
 pub type ValueWithTag = Option<Value>;
 pub type KVIterItem = (KeySlice, ValueSliceTag);
 
-
 #[derive(PartialEq, Eq)]
 struct KVPair(KVIterItem, usize);
 
@@ -18,28 +17,24 @@ struct KVPair(KVIterItem, usize);
 /// if find same key, return the kv from the iter which was the smallest number in the input iter vec
 /// that is to say, overwrite priority is decided by the order in the iters.eg iters[0]>iters[1]>..>iters[n]
 pub struct SortedKVIter<'a> {
-    iters: Vec<&'a mut dyn Iterator<Item=KVIterItem>>,
+    iters: Vec<&'a mut dyn Iterator<Item = KVIterItem>>,
     heap: BinaryHeap<Reverse<KVPair>>,
 }
 
 impl PartialOrd for KVPair {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        unsafe {
-            Some(self.0.0.data().cmp(other.0.0.data()))
-        }
+        unsafe { Some(self.0 .0.data().cmp(other.0 .0.data())) }
     }
 }
 
 impl Ord for KVPair {
     fn cmp(&self, other: &Self) -> Ordering {
-        unsafe {
-            self.0.0.data().cmp(other.0.0.data())
-        }
+        unsafe { self.0 .0.data().cmp(other.0 .0.data()) }
     }
 }
 
 impl<'a> SortedKVIter<'a> {
-    pub fn new(mut iters: Vec<&'a mut dyn Iterator<Item=KVIterItem>>) -> Self {
+    pub fn new(mut iters: Vec<&'a mut dyn Iterator<Item = KVIterItem>>) -> Self {
         let mut heap = BinaryHeap::new();
 
         for (p, iter_ref) in iters.iter_mut().enumerate() {
@@ -70,7 +65,7 @@ impl<'a> SortedKVIter<'a> {
                 }
                 return Some(entry);
             }
-            None => { None }
+            None => None,
         }
     }
 }
@@ -78,16 +73,15 @@ impl<'a> SortedKVIter<'a> {
 impl<'a> Iterator for SortedKVIter<'a> {
     type Item = KVIterItem;
 
-
     fn next(&mut self) -> Option<Self::Item> {
-//         pop one,check if exits
+        //         pop one,check if exits
         let res_option = self.pop_min();
 
         if res_option.is_none() {
             return None;
         }
-//         loop check top and pop until key is not same
-//         return kv from smallest iter
+        //         loop check top and pop until key is not same
+        //         return kv from smallest iter
         let mut res = res_option.unwrap();
 
         loop {
@@ -96,11 +90,11 @@ impl<'a> Iterator for SortedKVIter<'a> {
                 break;
             }
             let res_kv = res.0;
-            let res_key = res.0.0;
+            let res_key = res.0 .0;
             let res_iter_position = res.1;
 
             let top = top_option.unwrap();
-            let top_key = top.0.0;
+            let top_key = top.0 .0;
             let top_iter_position = top.1;
 
             if !top_key.eq(&res_key) {
@@ -129,17 +123,33 @@ mod test {
     #[test]
     pub fn test_sorted_kv_iter() {
         // a,b,c,f
-        let a = vec![(Key::new("a"), Value::new("a1")), (Key::new("b"), Value::new("b1")), (Key::new("c"), Value::new("c1")), (Key::new("f"), Value::new("f1"))];
+        let a = vec![
+            (Key::new("a"), Value::new("a1")),
+            (Key::new("b"), Value::new("b1")),
+            (Key::new("c"), Value::new("c1")),
+            (Key::new("f"), Value::new("f1")),
+        ];
         // a,b,e
-        let b = vec![(Key::new("a"), Value::new("a2")), (Key::new("b"), Value::new("b2")), (Key::new("e"), Value::new("e2"))];
+        let b = vec![
+            (Key::new("a"), Value::new("a2")),
+            (Key::new("b"), Value::new("b2")),
+            (Key::new("e"), Value::new("e2")),
+        ];
         // b,d,e
-        let c = vec![(Key::new("b"), Value::new("b3")), (Key::new("d"), Value::new("d3")), (Key::new("e"), Value::new("e3"))];
-        let mut it_a = a.iter().map(|e| (KeySlice::new(e.0.data()),
-                                         Some(ValueSlice::new(e.1.data()))));
-        let mut it_b = b.iter().map(|e| (KeySlice::new(e.0.data()),
-                                         Some(ValueSlice::new(e.1.data()))));
-        let mut it_c = c.iter().map(|e| (KeySlice::new(e.0.data()),
-                                         Some(ValueSlice::new(e.1.data()))));
+        let c = vec![
+            (Key::new("b"), Value::new("b3")),
+            (Key::new("d"), Value::new("d3")),
+            (Key::new("e"), Value::new("e3")),
+        ];
+        let mut it_a = a
+            .iter()
+            .map(|e| (KeySlice::new(e.0.data()), Some(ValueSlice::new(e.1.data()))));
+        let mut it_b = b
+            .iter()
+            .map(|e| (KeySlice::new(e.0.data()), Some(ValueSlice::new(e.1.data()))));
+        let mut it_c = c
+            .iter()
+            .map(|e| (KeySlice::new(e.0.data()), Some(ValueSlice::new(e.1.data()))));
         // kv in a will overwrite b,c and b will overwrite c
         let kv_iter = SortedKVIter::new(vec![&mut it_a, &mut it_b, &mut it_c]);
         let mut s = String::new();
@@ -153,9 +163,13 @@ mod test {
 
     #[test]
     pub fn test_sorted_kv_iter_top() {
-        let a = vec![(Key::new("a"), Value::new("a1")), (Key::new("b"), Value::new("b1"))];
-        let mut it_a = a.iter().map(|e| (KeySlice::new(e.0.data()),
-                                         Some(ValueSlice::new(e.1.data()))));
+        let a = vec![
+            (Key::new("a"), Value::new("a1")),
+            (Key::new("b"), Value::new("b1")),
+        ];
+        let mut it_a = a
+            .iter()
+            .map(|e| (KeySlice::new(e.0.data()), Some(ValueSlice::new(e.1.data()))));
         let mut kv_iter = SortedKVIter::new(vec![&mut it_a]);
         kv_iter.next();
         assert!(kv_iter.has_next());

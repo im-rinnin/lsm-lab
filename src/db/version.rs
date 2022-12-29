@@ -12,8 +12,10 @@ use crate::db::config;
 use crate::db::config::Config;
 use crate::db::file_storage::{FileId, FileStorageManager, ThreadSafeFileManager};
 use crate::db::key::Key;
-use crate::db::level::{CompactSStableResult, Level, LevelChange, SStableFileMeta, ThreadSafeSSTableMetaCache};
 use crate::db::level::LevelChange::{level_compact, memtable_compact};
+use crate::db::level::{
+    CompactSStableResult, Level, LevelChange, SStableFileMeta, ThreadSafeSSTableMetaCache,
+};
 use crate::db::memtable::Memtable;
 use crate::db::meta_log::{MetaLog, MetaLogIter};
 use crate::db::sstable::SSTable;
@@ -31,12 +33,25 @@ pub struct Version {
 }
 
 impl Version {
-    pub fn new(home_path: PathBuf, file_manager: ThreadSafeFileManager, sstable_cache: ThreadSafeSSTableMetaCache) -> Self {
-        Version { levels: HashMap::new(), sstable_cache, file_manager, home_path, config: Config::new() }
+    pub fn new(
+        home_path: PathBuf,
+        file_manager: ThreadSafeFileManager,
+        sstable_cache: ThreadSafeSSTableMetaCache,
+    ) -> Self {
+        Version {
+            levels: HashMap::new(),
+            sstable_cache,
+            file_manager,
+            home_path,
+            config: Config::new(),
+        }
     }
-    pub fn from(level_change_iter: &mut dyn Iterator<Item=LevelChange>,
-                home_path: PathBuf, file_manager: ThreadSafeFileManager,
-                sstable_cache: ThreadSafeSSTableMetaCache) -> Result<Self> {
+    pub fn from(
+        level_change_iter: &mut dyn Iterator<Item = LevelChange>,
+        home_path: PathBuf,
+        file_manager: ThreadSafeFileManager,
+        sstable_cache: ThreadSafeSSTableMetaCache,
+    ) -> Result<Self> {
         // iter meta log,get level change
         let mut level_sstable_file_metas: HashMap<usize, Vec<SStableFileMeta>> = HashMap::new();
         for level_change in level_change_iter {
@@ -44,15 +59,27 @@ impl Version {
             Version::apply_level_change(&mut level_sstable_file_metas, level_change)
         }
         let mut levels = HashMap::new();
-        Version::build_level(&home_path, &file_manager, &sstable_cache, &mut level_sstable_file_metas, &mut levels);
-        Ok(Version { levels, sstable_cache, file_manager, home_path, config: Config::new() })
+        Version::build_level(
+            &home_path,
+            &file_manager,
+            &sstable_cache,
+            &mut level_sstable_file_metas,
+            &mut levels,
+        );
+        Ok(Version {
+            levels,
+            sstable_cache,
+            file_manager,
+            home_path,
+            config: Config::new(),
+        })
     }
 
     // pick and find one level to compact
     pub fn compact_one_level(&self) -> Result<Option<LevelChange>> {
         // pick one level from 0 to n
         let depth = self.depth();
-        for level_number in 0..depth  {
+        for level_number in 0..depth {
             let level_option = self.levels.get(&level_number);
             if level_option.is_none() {
                 continue;
@@ -125,7 +152,9 @@ impl Version {
         let sstable = SSTable::from_iter_with_file_limit(&mut iter, file, 0)?;
         let sstable_meta = SStableFileMeta::from(&sstable, file_id);
         assert!(!iter.has_next());
-        let level_change = LevelChange::memtable_compact { sstable_file_metas: sstable_meta };
+        let level_change = LevelChange::memtable_compact {
+            sstable_file_metas: sstable_meta,
+        };
         Ok(level_change)
     }
 
@@ -136,8 +165,20 @@ impl Version {
         }
         Self::apply_level_change(&mut map, level_change);
         let mut levels = HashMap::new();
-        Version::build_level(&self.home_path, &self.file_manager, &self.sstable_cache, &mut map, &mut levels);
-        Version { levels, sstable_cache: self.sstable_cache.clone(), file_manager: self.file_manager.clone(), home_path: self.home_path.clone(), config: self.config.clone() }
+        Version::build_level(
+            &self.home_path,
+            &self.file_manager,
+            &self.sstable_cache,
+            &mut map,
+            &mut levels,
+        );
+        Version {
+            levels,
+            sstable_cache: self.sstable_cache.clone(),
+            file_manager: self.file_manager.clone(),
+            home_path: self.home_path.clone(),
+            config: self.config.clone(),
+        }
     }
 
     // find max level is not empty
@@ -155,28 +196,44 @@ impl Version {
         0
     }
 
-    fn build_level(home_path: &PathBuf, file_manager: &ThreadSafeFileManager, sstable_cache: &ThreadSafeSSTableMetaCache, level_sstable_file_metas: &mut HashMap<usize, Vec<SStableFileMeta>>, levels: &mut HashMap<usize, Level>) {
+    fn build_level(
+        home_path: &PathBuf,
+        file_manager: &ThreadSafeFileManager,
+        sstable_cache: &ThreadSafeSSTableMetaCache,
+        level_sstable_file_metas: &mut HashMap<usize, Vec<SStableFileMeta>>,
+        levels: &mut HashMap<usize, Level>,
+    ) {
         let len = level_sstable_file_metas.len();
         for i in 0..len {
             let metas = level_sstable_file_metas.remove(&i).unwrap();
-            let level = Level::new(metas, home_path.clone(), sstable_cache.clone(), file_manager.clone());
+            let level = Level::new(
+                metas,
+                home_path.clone(),
+                sstable_cache.clone(),
+                file_manager.clone(),
+            );
             levels.insert(i, level);
         }
     }
 
-    fn apply_level_change(mut level_sstable_file_metas: &mut HashMap<usize, Vec<SStableFileMeta>>, level_change: LevelChange) {
+    fn apply_level_change(
+        mut level_sstable_file_metas: &mut HashMap<usize, Vec<SStableFileMeta>>,
+        level_change: LevelChange,
+    ) {
         match level_change {
             LevelChange::level_compact {
                 compact_from_level,
                 compact_sstable,
-                compact_result
+                compact_result,
             } => {
                 // remove sstable from level
-                let compact_level_metas: &mut Vec<SStableFileMeta> = Self::get_or_default(&mut level_sstable_file_metas, compact_from_level);
+                let compact_level_metas: &mut Vec<SStableFileMeta> =
+                    Self::get_or_default(&mut level_sstable_file_metas, compact_from_level);
                 compact_level_metas.retain(|meta| meta.file_id().ne(&compact_sstable.file_id()));
 
                 // remove and add sstable in next level
-                let next_level_metas: &mut Vec<SStableFileMeta> = Self::get_or_default(&mut level_sstable_file_metas, compact_from_level + 1);
+                let next_level_metas: &mut Vec<SStableFileMeta> =
+                    Self::get_or_default(&mut level_sstable_file_metas, compact_from_level + 1);
 
                 let remove_length = compact_result.remove_sstables.len();
 
@@ -188,14 +245,20 @@ impl Version {
                     next_level_metas.insert(compact_result.position, add_sstables.pop().unwrap())
                 }
             }
-            LevelChange::memtable_compact { sstable_file_metas: mut sstable_file_meta } => {
-                let metas: &mut Vec<SStableFileMeta> = Self::get_or_default(&mut level_sstable_file_metas, 0);
+            LevelChange::memtable_compact {
+                sstable_file_metas: mut sstable_file_meta,
+            } => {
+                let metas: &mut Vec<SStableFileMeta> =
+                    Self::get_or_default(&mut level_sstable_file_metas, 0);
                 metas.insert(0, sstable_file_meta)
             }
         }
     }
 
-    fn get_or_default(map: &mut HashMap<usize, Vec<SStableFileMeta>>, key: usize) -> &mut Vec<SStableFileMeta> {
+    fn get_or_default(
+        map: &mut HashMap<usize, Vec<SStableFileMeta>>,
+        key: usize,
+    ) -> &mut Vec<SStableFileMeta> {
         if map.get_mut(&key).is_some() {
             return map.get_mut(&key).unwrap();
         }
@@ -207,7 +270,8 @@ impl Version {
         if level == 0 {
             return config.level_0_file_limit;
         }
-        ((config.level_size_expand_factor as u32).pow(level as u32) as usize) * 1024 * 1024 / config.sstable_file_limit
+        ((config.level_size_expand_factor as u32).pow(level as u32) as usize) * 1024 * 1024
+            / config.sstable_file_limit
     }
 }
 
@@ -218,7 +282,12 @@ impl Debug for Version {
             let mut s = String::new();
             let b = self.levels.get(&l).unwrap();
             for file_meta in b.copy_sstable_meta() {
-                let a = format!("file_id:{},file_start_key:{:?},file_end_key:{:?}", file_meta.file_id(), file_meta.start_key(), file_meta.last_key());
+                let a = format!(
+                    "file_id:{},file_start_key:{:?},file_end_key:{:?}",
+                    file_meta.file_id(),
+                    file_meta.start_key(),
+                    file_meta.last_key()
+                );
                 s.push_str(&a)
             }
             writeln!(f, "level: {},data {}", l, s)?;
@@ -271,16 +340,16 @@ mod test {
         let b_meta = SStableFileMeta::from(&sstable_b, file_b_id);
 
         let level_0_level_change_b = LevelChange::memtable_compact {
-            sstable_file_metas: b_meta
+            sstable_file_metas: b_meta,
         };
         let level_0_level_change_a = LevelChange::memtable_compact {
-            sstable_file_metas: a_meta
+            sstable_file_metas: a_meta,
         };
         let level_0_level_change_c = LevelChange::memtable_compact {
-            sstable_file_metas: c_meta.clone()
+            sstable_file_metas: c_meta.clone(),
         };
         let level_0_level_change_d = LevelChange::memtable_compact {
-            sstable_file_metas: d_meta.clone()
+            sstable_file_metas: d_meta.clone(),
         };
         let level_1_level_change_c = LevelChange::level_compact {
             compact_from_level: 0,
@@ -301,13 +370,22 @@ mod test {
             },
         };
 
-        let meta_log = vec![level_0_level_change_b, level_0_level_change_a, level_0_level_change_c, level_0_level_change_d, level_1_level_change_c, level_1_level_change_d];
+        let meta_log = vec![
+            level_0_level_change_b,
+            level_0_level_change_a,
+            level_0_level_change_c,
+            level_0_level_change_d,
+            level_1_level_change_c,
+            level_1_level_change_d,
+        ];
         let mut iter = meta_log.into_iter();
 
-        let version = Version::from(&mut iter, dir.into_path(),
-                                    Arc::new(Mutex::new(file_manager)),
-                                    Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(10).unwrap()
-                                    ))))?;
+        let version = Version::from(
+            &mut iter,
+            dir.into_path(),
+            Arc::new(Mutex::new(file_manager)),
+            Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(10).unwrap()))),
+        )?;
         Ok(version)
     }
 
@@ -330,14 +408,15 @@ level: 1,data file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \
         let meta_log = vec![];
         let mut iter = meta_log.into_iter();
 
-
-        let empty_version = Version::from(&mut iter, dir.into_path(),
-                                          Arc::new(Mutex::new(file_manager)),
-                                          Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(10).unwrap()
-                                          )))).unwrap();
+        let empty_version = Version::from(
+            &mut iter,
+            dir.into_path(),
+            Arc::new(Mutex::new(file_manager)),
+            Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(10).unwrap()))),
+        )
+        .unwrap();
         assert_eq!(empty_version.depth(), 0);
     }
-
 
     #[test]
     pub fn test_add_memtable() {
@@ -352,10 +431,19 @@ level: 1,data file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \
         println!("level change {:?}", level_change);
         let new_version = version.apply_change(level_change);
         println!("version {:?}", new_version);
-        assert_eq!(version.get(&Key::new("17")).unwrap(), Some(Value::new("17")));
+        assert_eq!(
+            version.get(&Key::new("17")).unwrap(),
+            Some(Value::new("17"))
+        );
 
-        assert_eq!(new_version.get(&Key::new("12")).unwrap(), Some(Value::new("mem")));
-        assert_eq!(new_version.get(&Key::new("7")).unwrap(), Some(Value::new("mem")));
+        assert_eq!(
+            new_version.get(&Key::new("12")).unwrap(),
+            Some(Value::new("mem"))
+        );
+        assert_eq!(
+            new_version.get(&Key::new("7")).unwrap(),
+            Some(Value::new("mem"))
+        );
     }
 
     #[test]
@@ -388,7 +476,8 @@ level: 1,data file_id:4,file_start_key:Key { k: \"15\" },file_end_key:Key { k: \
         let version_3 = version_2.apply_change(level_change);
         // println!("{:?}", version_3);
         assert_eq!(format!("{:?}", version_3),"level: 0,data file_id:3,file_start_key:Key { k: \"12\" },file_end_key:Key { k: \"17\" }
-level: 1,data \nlevel: 2,data file_id:4,file_start_key:Key { k: \"15\" },file_end_key:Key { k: \"20\" }file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \"14\" }\n") }
+level: 1,data \nlevel: 2,data file_id:4,file_start_key:Key { k: \"15\" },file_end_key:Key { k: \"20\" }file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \"14\" }\n")
+    }
 
     #[test]
     pub fn test_get() {

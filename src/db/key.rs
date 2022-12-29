@@ -9,7 +9,6 @@ pub struct Key {
     k: String,
 }
 
-
 #[derive(Clone, Eq, Copy, Debug)]
 pub struct KeySlice {
     ptr: *const u8,
@@ -60,7 +59,10 @@ pub const KEY_SIZE_LIMIT: usize = 1024;
 
 impl KeySlice {
     pub fn new(data: &[u8]) -> Self {
-        KeySlice { ptr: data.as_ptr(), size: data.len() }
+        KeySlice {
+            ptr: data.as_ptr(),
+            size: data.len(),
+        }
     }
     pub fn len(&self) -> usize {
         self.size
@@ -81,12 +83,16 @@ impl Key {
 
     pub fn from(s: &[u8]) -> Self {
         assert!(s.len() < KEY_SIZE_LIMIT);
-        Key { k: String::from_utf8(s.to_vec()).unwrap() }
+        Key {
+            k: String::from_utf8(s.to_vec()).unwrap(),
+        }
     }
 
     pub fn from_u8_vec(v: Vec<u8>) -> Self {
         assert!(v.len() < KEY_SIZE_LIMIT);
-        Key { k: String::from_utf8(v).unwrap() }
+        Key {
+            k: String::from_utf8(v).unwrap(),
+        }
     }
 
     pub fn to_string(&self) -> &str {
@@ -126,7 +132,6 @@ mod test {
         let a = Key::new("abc");
         let b = Key::new("abc");
 
-
         let a_key_slice = KeySlice::new(a.data());
         let b_key_slice = KeySlice::new(b.data());
 
@@ -135,7 +140,6 @@ mod test {
 
         let a = Key::new("bc");
         let b = Key::new("abc");
-
 
         let a_key_slice = KeySlice::new(a.data());
         let b_key_slice = KeySlice::new(b.data());
@@ -151,5 +155,3 @@ mod test {
         assert_eq!(key_slice.to_string(), "123");
     }
 }
-
-
