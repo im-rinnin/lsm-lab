@@ -140,7 +140,8 @@ mod test {
         manager.new_file().unwrap();
         manager.new_file().unwrap();
 
-        let manager = FileStorageManager::from(path).unwrap();
+        let mut manager = FileStorageManager::from(path).unwrap();
+        manager.all_file_ids.sort_by(|a, b| a.cmp(&b));
         assert_eq!(manager.all_file_ids, vec![0, 1, 2])
     }
 
