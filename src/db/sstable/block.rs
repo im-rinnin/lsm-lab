@@ -3,6 +3,7 @@ use std::io::{Read, Write};
 
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
 
 use crate::db::common::{KVIterItem, ValueSliceTag};
@@ -142,9 +143,9 @@ impl BlockMeta {
         write.write(self.start_key.data())?;
         write.write_u16::<LittleEndian>(self.last_key.len() as u16)?;
         write.write(self.last_key.data())?;
-        write.write_u16::<LittleEndian>(self.block_offset as u16)?;
-        write.write_u16::<LittleEndian>(self.size as u16)?;
-        write.write_u16::<LittleEndian>(self.entry_number as u16)?;
+        write.write_u32::<LittleEndian>(self.block_offset as u32)?;
+        write.write_u32::<LittleEndian>(self.size as u32)?;
+        write.write_u32::<LittleEndian>(self.entry_number as u32)?;
         Ok(())
     }
 
@@ -159,9 +160,10 @@ impl BlockMeta {
         reader.read(&mut end_key_data)?;
         let last_key = Key::from(&end_key_data);
 
-        let block_offset = reader.read_u16::<LittleEndian>()? as u64;
-        let size = reader.read_u16::<LittleEndian>()? as usize;
-        let entry_number = reader.read_u16::<LittleEndian>()? as usize;
+        let block_offset = reader.read_u32::<LittleEndian>()? as u64;
+        let size = reader.read_u32::<LittleEndian>()? as usize;
+        let entry_number = reader.read_u32::<LittleEndian>()? as usize;
+
 
         Ok(BlockMeta {
             start_key,
@@ -189,9 +191,9 @@ impl BlockMeta {
 
             let start_key = Key::from_u8_vec(start_key_data);
             let last_key = Key::from_u8_vec(last_key_data);
-            let block_offset = data.read_u16::<LittleEndian>()?;
-            let size = data.read_u16::<LittleEndian>()?;
-            let entry_number = data.read_u16::<LittleEndian>()?;
+            let block_offset = data.read_u32::<LittleEndian>()? as u32;
+            let size = data.read_u32::<LittleEndian>()?;
+            let entry_number = data.read_u32::<LittleEndian>()?;
 
             result.push(BlockMeta::new(
                 start_key,
