@@ -1,11 +1,11 @@
-
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
+use log::info;
 
 use crate::db::config;
 use crate::db::config::Config;
@@ -18,6 +18,8 @@ use crate::db::memtable::Memtable;
 use crate::db::meta_log::{MetaLog, MetaLogIter};
 use crate::db::sstable::SSTable;
 use crate::db::value::Value;
+
+use super::metrics::DBMetric;
 
 // all sstable meta
 // immutable, thread safe,create new version after insert new sstable/compact
@@ -32,7 +34,7 @@ pub struct Version {
 
 impl Version {
     pub fn new(
-        home_path: PathBuf,
+        home_path: &Path,
         file_manager: ThreadSafeFileManager,
         sstable_cache: ThreadSafeSSTableMetaCache,
     ) -> Self {
@@ -40,7 +42,7 @@ impl Version {
             levels: HashMap::new(),
             sstable_cache,
             file_manager,
-            home_path,
+            home_path: PathBuf::from(home_path),
             config: Config::new(),
         }
     }
@@ -85,7 +87,10 @@ impl Version {
             let level = level_option.unwrap();
             let len = level.len();
             if len > Self::level_file_number_limit(level_number, &self.config) {
-                return self.do_compact(level_number, level);
+                info!("start compact level {}", level_number);
+                let res = self.do_compact(level_number, level);
+                info!("{} compact finished", level_number);
+                return res;
             }
         }
         return Ok(None);
@@ -147,9 +152,10 @@ impl Version {
         // build sstable from memtable (sstable::build)
         let mut iter = memtable.iter();
         let (file, file_id, _) = self.file_manager.lock().unwrap().new_file()?;
-        let sstable = SSTable::from_iter_with_file_limit(&mut iter, file, 0)?;
+        let (sstable_opt, has_next) = SSTable::from_iter_with_file_limit(&mut iter, file, 0)?;
+        let sstable = sstable_opt.unwrap();
         let sstable_meta = SStableFileMeta::from(&sstable, file_id);
-        assert!(!iter.has_next());
+        assert!(iter.next().is_none());
         let level_change = LevelChange::MemtableCompact {
             sstable_file_metas: sstable_meta,
         };
@@ -290,7 +296,7 @@ impl Debug for Version {
             let b = self.levels.get(&l).unwrap();
             for file_meta in b.copy_sstable_meta() {
                 let a = format!(
-                    "file_id:{},file_start_key:{:?},file_end_key:{:?}",
+                    "file_id:{},file_start_key:{:?},file_end_key:{:?}\n",
                     file_meta.file_id(),
                     file_meta.start_key(),
                     file_meta.last_key()
@@ -399,8 +405,7 @@ mod test {
     #[test]
     pub fn test_build_level() {
         let version = build_level().unwrap();
-        let s = "level: 0,data file_id:3,file_start_key:Key { k: \"12\" },file_end_key:Key { k: \"17\" }file_id:2,file_start_key:Key { k: \"15\" },file_end_key:Key { k: \"19\" }
-level: 1,data file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \"14\" }file_id:1,file_start_key:Key { k: \"17\" },file_end_key:Key { k: \"20\" }\n";
+        let s = "level: 0,data file_id:3,file_start_key:Key { k: \"12\" },file_end_key:Key { k: \"17\" }\nfile_id:2,file_start_key:Key { k: \"15\" },file_end_key:Key { k: \"19\" }\n\nlevel: 1,data file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \"14\" }\nfile_id:1,file_start_key:Key { k: \"17\" },file_end_key:Key { k: \"20\" }\n\n";
         assert_eq!(format!("{:?}", version), s);
     }
 
@@ -410,7 +415,7 @@ level: 1,data file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \
         assert_eq!(version.depth(), 2);
 
         let dir = tempdir().unwrap();
-        let  file_manager = FileStorageManager::new(dir.path());
+        let file_manager = FileStorageManager::new(dir.path());
 
         let meta_log = vec![];
         let mut iter = meta_log.into_iter();
@@ -468,22 +473,19 @@ level: 1,data file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \
         let level_change = version_0.compact_one_level().unwrap().unwrap();
         let version_1 = version_0.apply_change(level_change);
         // println!("{:?}", version_1);
-        assert_eq!(format!("{:?}", version_1),"level: 0,data file_id:3,file_start_key:Key { k: \"12\" },file_end_key:Key { k: \"17\" }
-level: 1,data file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \"14\" }file_id:4,file_start_key:Key { k: \"15\" },file_end_key:Key { k: \"20\" }\n");
+        assert_eq!(format!("{:?}", version_1),"level: 0,data file_id:3,file_start_key:Key { k: \"12\" },file_end_key:Key { k: \"17\" }\n\nlevel: 1,data file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \"14\" }\nfile_id:4,file_start_key:Key { k: \"15\" },file_end_key:Key { k: \"20\" }\n\n");
         let res = version_1.get(&Key::new("16")).unwrap().unwrap();
         assert_eq!(res, Value::new("a"));
 
         let level_change = version_1.compact_one_level().unwrap().unwrap();
         let version_2 = version_1.apply_change(level_change);
         // println!("{:?}", version_2);
-        assert_eq!(format!("{:?}", version_2),"level: 0,data file_id:3,file_start_key:Key { k: \"12\" },file_end_key:Key { k: \"17\" }
-level: 1,data file_id:4,file_start_key:Key { k: \"15\" },file_end_key:Key { k: \"20\" }\nlevel: 2,data file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \"14\" }\n");
+        assert_eq!(format!("{:?}", version_2),"level: 0,data file_id:3,file_start_key:Key { k: \"12\" },file_end_key:Key { k: \"17\" }\n\nlevel: 1,data file_id:4,file_start_key:Key { k: \"15\" },file_end_key:Key { k: \"20\" }\n\nlevel: 2,data file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \"14\" }\n\n");
 
         let level_change = version_2.compact_one_level().unwrap().unwrap();
         let version_3 = version_2.apply_change(level_change);
         // println!("{:?}", version_3);
-        assert_eq!(format!("{:?}", version_3),"level: 0,data file_id:3,file_start_key:Key { k: \"12\" },file_end_key:Key { k: \"17\" }
-level: 1,data \nlevel: 2,data file_id:4,file_start_key:Key { k: \"15\" },file_end_key:Key { k: \"20\" }file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \"14\" }\n")
+        assert_eq!(format!("{:?}", version_3),"level: 0,data file_id:3,file_start_key:Key { k: \"12\" },file_end_key:Key { k: \"17\" }\n\nlevel: 1,data \nlevel: 2,data file_id:0,file_start_key:Key { k: \"11\" },file_end_key:Key { k: \"14\" }\nfile_id:4,file_start_key:Key { k: \"15\" },file_end_key:Key { k: \"20\" }\n\n");
     }
 
     #[test]

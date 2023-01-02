@@ -152,25 +152,30 @@ impl SSTable {
     }
     /// build new sstable, may not use out iterator if sstable size reach limit
     /// use BufWriter if possible
+    /// return bool: if is finished
     pub fn from_iter(
         kv_iters: &mut dyn Iterator<Item = KVIterItem>,
         file: File,
-    ) -> Result<SSTable> {
+    ) -> Result<(Option<SSTable>, bool)> {
         Self::from_iter_with_file_limit(kv_iters, file, Self::SSTABLE_SIZE_LIMIT)
     }
     pub fn from_iter_with_file_limit(
         kv_iters: &mut dyn Iterator<Item = KVIterItem>,
         mut file: File,
         limit_file_size: usize,
-    ) -> Result<SSTable> {
+    ) -> Result<(Option<SSTable>, bool)> {
         let mut block_builder = BlockBuilder::new();
         let mut entry_count = 0;
         let mut block_metas = Vec::new();
         let mut last_block_position = 0;
         let mut start_key = None;
         let sstable_writer = &mut file;
+        let iter_has_next;
 
         let mut next_entry = kv_iters.next();
+        if next_entry.is_none() {
+            return Ok((None, false));
+        }
         loop {
             match next_entry {
                 Some((key_slice, value)) => {
@@ -204,10 +209,12 @@ impl SSTable {
                     }
                 }
                 None => {
+                    iter_has_next = false;
                     break;
                 }
             }
             if limit_file_size > 0 && last_block_position >= limit_file_size as u64 {
+                iter_has_next = true;
                 info!("sstable size is {:}, reach file limit", last_block_position);
                 break;
             }
@@ -221,10 +228,13 @@ impl SSTable {
         sstable_writer.write_u64::<LittleEndian>(block_metas.len() as u64)?;
         sstable_writer.write_u64::<LittleEndian>(last_block_position)?;
 
-        Ok(SSTable {
-            sstable_metas: Arc::new(SStableBlockMeta { block_metas }),
-            file: RefCell::new(file),
-        })
+        Ok((
+            Some(SSTable {
+                sstable_metas: Arc::new(SStableBlockMeta { block_metas }),
+                file: RefCell::new(file),
+            }),
+            iter_has_next,
+        ))
     }
 
     pub fn iter(&self) -> Result<SStableIter> {
@@ -273,6 +283,7 @@ pub mod test {
     use std::sync::Arc;
 
     use anyhow::Result;
+    use log::LevelFilter;
     use tempfile::tempdir;
 
     use crate::db::common::{SortedKVIter, ValueWithTag};
@@ -296,8 +307,8 @@ pub mod test {
                 e.1.as_ref().map(|f| ValueSlice::new(f.data())),
             )
         });
-        let sstable = SSTable::from_iter(&mut it, file).unwrap();
-        sstable
+        let (sstable, _) = SSTable::from_iter(&mut it, file).unwrap();
+        sstable.unwrap()
     }
 
     // build sstable 1->100
@@ -344,7 +355,8 @@ pub mod test {
             .iter()
             .map(|e| (KeySlice::new(e.0.data()), Some(ValueSlice::new(e.1.data()))));
         let c = tempfile::tempfile().unwrap();
-        let sstable = SSTable::from_iter(&mut it, c).unwrap();
+        let (sstable, _) = SSTable::from_iter(&mut it, c).unwrap();
+        let sstable = sstable.unwrap();
 
         // check sstable
         for i in 0..number {
@@ -394,7 +406,8 @@ pub mod test {
 
         let mut sorted_kv_iter = SortedKVIter::new(vec![&mut sstable_1_iter, &mut sstable_2_iter]);
         let sstable_3_file = tempfile::tempfile().unwrap();
-        let sstable_3 = SSTable::from_iter(&mut sorted_kv_iter, sstable_3_file).unwrap();
+        let (sstable_3, _) = SSTable::from_iter(&mut sorted_kv_iter, sstable_3_file).unwrap();
+        let sstable_3 = sstable_3.unwrap();
         let sstable_3_on_file_iter = sstable_3.iter().unwrap();
         for (i, data) in sstable_3_on_file_iter.enumerate() {
             unsafe { assert_eq!(from_utf8(data.0.data()).unwrap(), i.to_string()) }
@@ -425,7 +438,8 @@ pub mod test {
         let path = dir.into_path();
         let mut file_manager = FileStorageManager::new(path.as_path());
         let (sstable_2_file, id, _) = file_manager.new_file().unwrap();
-        let sstable_2 = SSTable::from_iter(&mut iter_1, sstable_2_file).unwrap();
+        let (sstable_2, _) = SSTable::from_iter(&mut iter_1, sstable_2_file).unwrap();
+        let sstable_2 = sstable_2.unwrap();
         let sstable_2_meta = sstable_2.block_metadata();
 
         let mut file = FileStorageManager::open_file(path.as_path(), &id).unwrap();

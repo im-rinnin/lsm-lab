@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
+use log::debug;
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
 
@@ -170,9 +171,13 @@ impl Level {
         let mut res = Vec::new();
         loop {
             let (file, file_id, _) = file_manager.new_file()?;
-            let sstable = SSTable::from_iter(&mut iter, file)?;
+            let (sstable_opt, has_next) = SSTable::from_iter(&mut iter, file)?;
+            if sstable_opt.is_none() {
+                break;
+            }
+            let sstable = sstable_opt.unwrap();
             res.push(SStableFileMeta::from(&sstable, file_id));
-            if !iter.has_next() {
+            if !has_next {
                 break;
             }
         }
@@ -245,10 +250,14 @@ impl Level {
         let mut res = Vec::new();
         loop {
             let (file, file_id, _) = self.file_manager.lock().unwrap().new_file()?;
-            let sstable = SSTable::from_iter(&mut sorted_iter, file)?;
+            let (sstable_opt, has_next) = SSTable::from_iter(&mut sorted_iter, file)?;
+            if sstable_opt.is_none() {
+                break;
+            }
+            let sstable = sstable_opt.unwrap();
             let meta = SStableFileMeta::from(&sstable, file_id);
             res.push(meta);
-            if !sorted_iter.has_next() {
+            if !has_next {
                 break;
             }
         }
