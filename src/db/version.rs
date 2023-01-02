@@ -194,6 +194,15 @@ impl Version {
         0
     }
 
+    pub fn record_metrics(&self, metric: &DBMetric) {
+        let depth = self.depth();
+        for i in 0..depth {
+            let level = self.levels.get(&i);
+            let len = if let Some(l) = level { l.len() } else { 0 } as u64;
+            metric.set_level_n_file_number(len, i);
+        }
+    }
+
     fn build_level(
         home_path: &PathBuf,
         file_manager: &ThreadSafeFileManager,
