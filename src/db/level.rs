@@ -208,7 +208,7 @@ impl Level {
             return Ok(CompactSStableResult {
                 remove_sstables: vec![],
                 add_sstables: input_sstables_metas,
-                position: 0,
+                position,
             });
         }
         let (sstable_overlap, start_position) = key_overlap_res.unwrap();
