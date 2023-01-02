@@ -199,6 +199,12 @@ impl Level {
         // find key overlap sstable
         let key_overlap_res = self.key_overlap(&start_key, &end_key);
         if key_overlap_res.is_none() {
+            let position;
+            if self.last_key().lt(&start_key) {
+                position = self.len();
+            } else {
+                position = 0;
+            }
             return Ok(CompactSStableResult {
                 remove_sstables: vec![],
                 add_sstables: input_sstables_metas,
