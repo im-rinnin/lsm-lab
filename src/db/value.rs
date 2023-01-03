@@ -2,7 +2,9 @@ use core::slice;
 use std::fmt::{Display, Formatter};
 use std::slice::from_raw_parts;
 
-#[derive(Clone, Eq, PartialEq, Debug, Ord, PartialOrd)]
+use serde::{Serialize, Deserialize};
+
+#[derive(Clone, Eq, PartialEq, Debug, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct Value {
     v: Vec<u8>,
 }
@@ -38,7 +40,7 @@ impl Display for ValueSlice {
     }
 }
 
-const VALUE_SIZE_LIMIT: usize = 1024;
+pub const VALUE_SIZE_LIMIT: usize = 1024;
 
 impl Value {
     pub fn from_u8(s: &[u8]) -> Self {

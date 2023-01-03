@@ -41,7 +41,7 @@ mod memtable_log;
 mod meta_log;
 mod metrics;
 mod sstable;
-pub mod value;
+mod value;
 
 mod version;
 
