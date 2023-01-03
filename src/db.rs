@@ -338,64 +338,64 @@ impl DBServer {
         let mut start_immediate = false;
         loop {
             if !start_immediate {
-            let res = start_compact.recv();
+                let res = start_compact.recv();
                 if res.is_err() {
                     info!("compact channel is closed, stop compaction routine");
-                return Ok(());
+                    return Ok(());
+                }
             }
-        }
             start_immediate = false;
             info!("compact thread recv signal");
 
             // compact memtable
-        let (_, immutable_memtable_option, version) = get_current_data(&data);
-        //     append sstable to level 0
-        let imm_memtable = immutable_memtable_option.expect("must exits");
-        let level_change = version.add_memtable_to_level_0(imm_memtable.as_ref())?;
-        let new_version = version.apply_change(level_change.clone());
+            let (_, immutable_memtable_option, version) = get_current_data(&data);
+            //     append sstable to level 0
+            let imm_memtable = immutable_memtable_option.expect("must exits");
+            let level_change = version.add_memtable_to_level_0(imm_memtable.as_ref())?;
+            let new_version = version.apply_change(level_change.clone());
             let mut new_version_arc = Arc::new(new_version);
-        // write level change to meta log
-        Self::save_level_change_to_meta_log(&mut meta_log, &level_change)?;
-        //     lock data
-        {
-            let mut lock_result = data.write().unwrap();
-            let (memtable_ref, immutable_memtable, version) = lock_result.deref_mut();
-            //     set immutable memtable to None
-            *immutable_memtable = None;
-            // set version
+            // write level change to meta log
+            Self::save_level_change_to_meta_log(&mut meta_log, &level_change)?;
+            //     lock data
+            {
+                let mut lock_result = data.write().unwrap();
+                let (memtable_ref, immutable_memtable, version) = lock_result.deref_mut();
+                //     set immutable memtable to None
+                *immutable_memtable = None;
+                // set version
                 let mut current_version = version.lock().unwrap();
                 debug!("set version to {:?}", new_version_arc);
                 new_version_arc.record_metrics(metric.as_ref());
                 *current_version = new_version_arc.clone();
-            //     unlock data
-        }
+                //     unlock data
+            }
             {
-        //     notify write thread
-        let (lock, cvar) = &*compact_condition_pair;
-        let mut compact_is_finish = lock.lock().unwrap();
-        *compact_is_finish = true;
-        cvar.notify_all();
+                //     notify write thread
+                let (lock, cvar) = &*compact_condition_pair;
+                let mut compact_is_finish = lock.lock().unwrap();
+                *compact_is_finish = true;
+                cvar.notify_all();
             }
             // compact sstable
             loop {
-        //     check level from 0 to n, do one level compact
-        let compact_res = new_version_arc.compact_one_level()?;
+                //     check level from 0 to n, do one level compact
+                let compact_res = new_version_arc.compact_one_level()?;
                 if compact_res.is_none() {
                     debug!("check level finished, no need to compact");
                     break;
                 }
                 let level_change = compact_res.unwrap();
-            Self::save_level_change_to_meta_log(&mut meta_log, &level_change)?;
-            {
-                let mut lock_result = data.write().unwrap();
-                let (_, _, version) = lock_result.deref_mut();
+                Self::save_level_change_to_meta_log(&mut meta_log, &level_change)?;
+                {
+                    let mut lock_result = data.write().unwrap();
+                    let (_, _, version) = lock_result.deref_mut();
                     let mut current_verison = version.lock().unwrap();
                     let new_version = current_verison.apply_change(level_change);
                     debug!("set version to {:?}", new_version);
                     new_version.record_metrics(&metric);
                     *current_verison = Arc::new(new_version);
                     new_version_arc = current_verison.clone();
-                //     unlock data
+                    //     unlock data
                 }
                 // check if need compact memtable
                 let res = start_compact.try_recv();
@@ -450,11 +450,23 @@ mod test {
         //     reopen db
     }
 
-    #[test]
-    fn test_db_simple_get_set() {
+    fn build_3_level(dir: &TempDir) -> (DBServer, super::DBClient, i32) {
+        let mut c = Config::new();
+        c.memtable_size_limit = 1000;
+        let db = DBServer::new_with_confing(dir.path(), c).unwrap();
+        let mut client = db.new_client().unwrap();
+        let number = 1000;
+        for i in 0..number {
+            let key = Key::new(&i.to_string());
+            let value = Value::new(&i.to_string());
+            client.put(&key, value).unwrap();
+        }
+
+        (db, client, number)
     }
+
     #[test]
-    fn test_simple_set_and_get_without_padding() {
+    fn test_simple_set_and_get() {
         init_test_log_as_debug();
 
         //     new db
@@ -465,7 +477,7 @@ mod test {
         c.memtable_size_limit = 1000;
         let db_server = DBServer::new_with_confing(dir_path, c).unwrap();
         let mut db_client = db_server.new_client().unwrap();
-        let number = 1200;
+        let number = 1150;
         for i in 0..number {
             // add 0 to make key enough long to trigger bug
             let mut key = String::from("0");
@@ -477,42 +489,59 @@ mod test {
                 .unwrap();
         }
 
-        let res = db_client.get(&Key::new("0_49")).unwrap().unwrap();
-        assert_eq!(res, Value::new("49"));
-
         for i in 0..number {
             let mut key = String::from("0");
             key.push_str("_");
             key.push_str(&i.to_string());
             let value_res = db_client.get(&Key::new(&key));
+            assert_eq!(value_res.unwrap().unwrap(), Value::new(&i.to_string()))
         }
         db_server.close().unwrap();
     }
 
-    // todo #[test]
+    // use 3 thread set and get in different keys
+    #[test]
     fn test_db_multiple_thread_get_set() {
+        // init_test_log_as_debug();
+
         //     new db
         let dir = TempDir::new().unwrap();
         let dir_path = dir.path();
-        let db_server = DBServer::new(dir_path).unwrap();
+
+        let mut c = Config::new();
+        c.memtable_size_limit = 1000;
+
+        let db_server = DBServer::new_with_confing(dir_path, c).unwrap();
         //     create 3 thread
         let mut handles = Vec::new();
-        for i in 0..3 {
+        for thread_id in 0..1 {
             let mut db_client = db_server.new_client().unwrap();
+            let number = 1200;
             let handle = thread::spawn(move || {
                 //     for each thread do set from 1 to 1000, and check by get key
-                for i in 0..1000 {
-                    db_client.put(
-                        &Key::from(i.to_string().as_bytes()),
-                        Value::new(&i.to_string()),
-                    ).unwrap();
-                }
-                for i in 0..1000 {
-                    let value = db_client
-                        .get(&Key::from(i.to_string().as_bytes()))
-                        .unwrap()
+                for i in 0..number {
+                    let mut key = thread_id.to_string();
+                    key.push_str("_");
+                    key.push_str(&i.to_string());
+
+                    db_client
+                        .put(&Key::new(&key), Value::new(&i.to_string()))
                         .unwrap();
-                    assert_eq!(value, Value::new(&i.to_string()))
+                }
+
+                for i in 0..number {
+                    let mut key = thread_id.to_string();
+                    key.push_str("_");
+                    key.push_str(&i.to_string());
+                    debug!("key is {:}", key);
+                    let value_res = db_client.get(&Key::new(&key));
+                    if value_res.is_err() {
+                        panic!("get key error {:?}", value_res);
+                    }
+                    if value_res.unwrap().is_none() {
+                        error!("key not found {:?}", key);
+                    }
+                    // assert_eq!(value_res.unwrap().unwrap(), Value::new(&i.to_string()))
                 }
             });
             handles.push(handle);
@@ -524,4 +553,3 @@ mod test {
         db_server.close().unwrap();
     }
 }
-

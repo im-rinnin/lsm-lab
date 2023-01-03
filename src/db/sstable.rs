@@ -169,6 +169,7 @@ impl SSTable {
         let mut block_metas = Vec::new();
         let mut last_block_position = 0;
         let mut start_key = None;
+        let mut current_key;
         let sstable_writer = &mut file;
         let iter_has_next;
 
@@ -183,6 +184,11 @@ impl SSTable {
                     block_builder.append(key_slice, value)?;
                     entry_count += 1;
 
+                    // save current key, because call next() will make current key invalide
+                    unsafe {
+                        current_key = Some(Key::from(key_slice.data()));
+                    }
+
                     if start_key == None {
                         unsafe {
                             start_key = Some(Key::from(key_slice.data()));
@@ -192,16 +198,14 @@ impl SSTable {
                     next_entry = kv_iters.next();
                     //     check block_builder size, if is more than 4k flush it
                     if block_builder.len() > BLOCK_SIZE || next_entry.is_none() {
-                        unsafe {
-                            assert!(start_key.is_some());
-                            block_metas.push(BlockMeta::new(
-                                start_key.unwrap(),
-                                Key::from(key_slice.data()),
-                                entry_count,
-                                block_builder.len(),
-                                last_block_position,
-                            ));
-                        }
+                        assert!(start_key.is_some());
+                        block_metas.push(BlockMeta::new(
+                            start_key.unwrap(),
+                            current_key.unwrap(),
+                            entry_count,
+                            block_builder.len(),
+                            last_block_position,
+                        ));
                         start_key = None;
                         last_block_position += block_builder.len() as u64;
                         block_builder.flush(sstable_writer)?;
