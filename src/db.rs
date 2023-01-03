@@ -467,7 +467,7 @@ mod test {
 
     #[test]
     fn test_simple_set_and_get() {
-        init_test_log_as_debug();
+        // init_test_log_as_debug();
 
         //     new db
         let dir = TempDir::new().unwrap();
