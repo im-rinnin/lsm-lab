@@ -33,6 +33,9 @@ impl MemtableLog {
     pub fn add(&mut self, key: &Key, value: &Value) -> Result<()> {
         key.serialize(&mut Serializer::new(&mut self.file))?;
         value.serialize(&mut Serializer::new(&mut self.file))?;
+        Ok(())
+    }
+    pub fn sync_all(&mut self) -> Result<()> {
         self.file.sync_all()?;
         Ok(())
     }

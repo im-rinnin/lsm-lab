@@ -1,17 +1,19 @@
 use log::{debug, info, trace};
 use lru::LruCache;
+use rmp_serde::encode::Error;
 use std::borrow::{Borrow, BorrowMut};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::Read;
 use std::num::{NonZeroIsize, NonZeroUsize};
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Sub};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
-use std::time::Duration;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant, SystemTime};
 use std::{sync, thread};
 
 use anyhow::Result;
@@ -79,6 +81,7 @@ pub struct DBServer {
     file_manager: ThreadSafeFileManager,
     config: Config,
     metrics: Arc<DBMetric>,
+    thread_handle: Vec<JoinHandle<Result<()>>>,
 }
 
 pub struct DBClient {
@@ -112,6 +115,10 @@ fn get_current_data(data: &ThreadSafeData) -> (Arc<Memtable>, Option<Arc<Memtabl
 }
 
 impl DBClient {
+    pub fn get_str(&self, key: &str) -> Result<Option<Value>> {
+        self.get(&Key::new(key))
+    }
+
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
         let (memtable, immutable_memtable, version) = get_current_data(&self.data);
         // search in current memtable
@@ -146,7 +153,7 @@ impl DBClient {
 }
 
 impl DBServer {
-    pub fn open_db(path: String) -> Result<Self> {
+    pub fn open_db(path: &Path) -> Result<Self> {
         //     open memtable_log
         //     build version from log
 
@@ -173,6 +180,9 @@ impl DBServer {
         let meta_log_file = File::create(meta_log_file_path)?;
         let meta_log = MetaLog::new(meta_log_file);
 
+        let memtable_log_path = path.join(PathBuf::from(&default_config.memtable_log_file_path));
+        let memtable_log_file = File::create(memtable_log_path)?;
+
         // create file_manager
         let file_storage = Arc::new(Mutex::new(FileStorageManager::new(path)));
 
@@ -183,7 +193,7 @@ impl DBServer {
 
         let metric = Arc::new(DBMetric::new());
 
-        let db = DBServer {
+        let mut db = DBServer {
             path: PathBuf::from(path),
             data: data.clone(),
             // meta_log: meta_log,
@@ -191,6 +201,7 @@ impl DBServer {
             config: default_config.clone(),
             write_request_sender: sender,
             metrics: metric.clone(),
+            thread_handle: Vec::new(),
         };
 
         // call init routine
@@ -224,18 +235,25 @@ impl DBServer {
                 default_config,
                 start_compact_sender,
                 metric_clone,
+                memtable_log_file,
             );
             info!("write_routine return res is {:?}", res);
             res
         });
 
+        db.thread_handle.push(write_routine_join);
+        db.thread_handle.push(compact_routine_join_handle);
+
         Ok(db)
     }
 
-    pub fn close(self) -> Result<(), MyError> {
-        // wait all client exit()
-        // stop routine
-        self.stop_routines();
+    pub fn close(mut self) -> Result<()> {
+        info!("close db");
+        drop(self.write_request_sender);
+        while let Some(h) = self.thread_handle.pop() {
+            // TODO: log
+            let error = h.join();
+        }
         Ok(())
     }
 
@@ -264,44 +282,40 @@ impl DBServer {
         config: Config,
         start_compact_sender: Sender<()>,
         metric: Arc<DBMetric>,
+        memtable_log_file: File,
     ) -> Result<()> {
-        let mut write_size_count = 0;
+        let mut memtable_log = MemtableLog::new(memtable_log_file);
+        let mut request_buffer: Vec<WriteRequest> = Vec::new();
+
+        let mut channal_is_open = true;
+        let mut memtable_size = 0;
         loop {
-            let lock_result = data.write().unwrap();
-            let (memtable_ref, b, c) = lock_result.deref();
-            let memtable = (*memtable_ref).lock().unwrap().clone();
-            drop(lock_result);
-
-            info!("ready for new write request");
-            // write data to memtable
-            loop {
-                let request_result = write_request_channel.recv();
-                if request_result.is_err() {
-                    info!("request_channel is closed, close compact channel, stop writer routine");
-                    return Ok(());
-                }
-                let request = request_result.unwrap();
-                trace!("received write request");
-                let request_size = request.key.len() + request.value.len();
-                write_size_count += request_size;
-
-                memtable.insert(&request.key, &request.value);
-                // TODO: log error;
-                let current_level_0_len = metric.get_level_n_file_number(0);
-                if current_level_0_len > 4 {
-                    thread::sleep(Duration::from_millis(20));
-                }
-                let send_res = request.finish.send(());
-
-                if write_size_count > config.memtable_size_limit {
-                    info!("memtable write size limit  try to start compact");
-                    break;
-                }
+            if !channal_is_open {
+                info!("Channal is closed, write routine return");
+                return Ok(());
             }
+            channal_is_open = save_to_log(
+                &config,
+                &write_request_channel,
+                &mut memtable_log,
+                &mut request_buffer,
+            )?;
 
+            let need_compact = write_to_memtable(
+                &data,
+                &mut request_buffer,
+                &metric,
+                &config,
+                &mut memtable_size,
+            );
+            if !need_compact {
+                continue;
+            }
             // need compact
-            // wait compact finish
+            memtable_size = 0;
+
             let (lock, cvar) = &*compact_condition_pair;
+            // wait compact finish
             let mut compact_is_finish = lock.lock().unwrap();
             while !*compact_is_finish {
                 info!("compact is running, wait for finish");
@@ -318,9 +332,7 @@ impl DBServer {
             *immutable_memtable = Some(t);
             *memtable = Arc::new(Memtable::new());
 
-            write_size_count = 0;
-
-            // TODO: log resj
+            // TODO: log res
             let send_res = start_compact_sender.send(());
             info!("send signal to compact thread,send res is {:?}", send_res);
             *compact_is_finish = false;
@@ -417,10 +429,100 @@ impl DBServer {
             }
         }
     }
+}
 
-    fn stop_routines(&self) {
-        // self.write_request_sender
+// return true if need compact memtable
+fn write_to_memtable(
+    data: &Arc<
+        RwLock<(
+            Arc<Mutex<Arc<Memtable>>>,
+            Option<Arc<Memtable>>,
+            Arc<Mutex<Arc<Version>>>,
+        )>,
+    >,
+    request_buffer: &mut Vec<WriteRequest>,
+    metric: &Arc<DBMetric>,
+    config: &Config,
+    memtable_size: &mut usize,
+) -> bool {
+    // get current memtable
+    let lock_result = data.write().unwrap();
+    let (memtable_ref, b, c) = lock_result.deref();
+    let memtable = (*memtable_ref).lock().unwrap().clone();
+    drop(lock_result);
+    // write data to memtable
+    while let Some(request) = request_buffer.pop() {
+        memtable.insert(&request.key, &request.value);
+        *memtable_size += request.value.len() + request.key.len();
+
+        // TODO: log error;
+        let current_level_0_len = metric.get_level_n_file_number(0);
+        if current_level_0_len > 4 {
+            thread::sleep(Duration::from_millis(20));
+        }
+        let send_res = request.finish.send(());
     }
+    // check size
+    if *memtable_size > config.memtable_size_limit {
+        info!("memtable write size limit  try to start compact");
+        return true;
+    }
+    return false;
+}
+
+// return false if write channel is closed
+fn save_to_log(
+    config: &Config,
+    write_request_channel: &Receiver<WriteRequest>,
+    memtable_log: &mut MemtableLog,
+    request_buffer: &mut Vec<WriteRequest>,
+) -> Result<bool, anyhow::Error> {
+    let mut write_size_count = 0;
+    let start_time = Instant::now();
+    let mut channel_is_open = true;
+    loop {
+        let now = Instant::now();
+        let pass_time = now.duration_since(start_time);
+        let rest_time = config
+            .request_write_buffer_wait_time
+            .saturating_sub(pass_time);
+
+        if rest_time.is_zero() {
+            info!("use all time, save log return");
+            break;
+        }
+
+        let request_result = write_request_channel.recv_timeout(
+            config
+                .request_write_buffer_wait_time
+                .saturating_sub(rest_time),
+        );
+        match request_result {
+            Err(RecvTimeoutError::Timeout) => {
+                debug!("write request channel timed out");
+                break;
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                info!("request_channel is closed, close compact channel, stop writer routine");
+                channel_is_open = false;
+                break;
+            }
+            Ok(request) => {
+                trace!("received write request");
+                let request_size = request.key.len() + request.value.len();
+                write_size_count += request_size;
+                memtable_log.add(&request.key, &request.value)?;
+                request_buffer.push(request);
+                if write_size_count > config.request_write_batch_size {
+                    info!("reach write buffer size limit, save log return");
+                    break;
+                }
+            }
+        }
+    }
+    memtable_log.sync_all()?;
+
+    Ok(channel_is_open)
 }
 
 #[cfg(test)]
@@ -440,29 +542,37 @@ mod test {
     use crate::db::DBServer;
 
     use super::common::init_test_log_as_debug;
+    use super::DBClient;
 
     // #[test]
     fn test_db_build_and_reopen() {
         //     build db from path
-        // let (db_server, client, number) = build_3_level();
-        todo!()
+        let dir = TempDir::new().unwrap();
+        let number = 1000;
+        let (db_server, _) = build_3_level(&dir, number);
 
-        //     reopen db
+        db_server.close().unwrap();
+
+        let path = dir.into_path();
+        let db_server = DBServer::open_db(&path).unwrap();
+        let client = db_server.new_client().unwrap();
+        for i in 0..number {
+            let res = client.get_str(&i.to_string()).unwrap().unwrap();
+            assert_eq!(res, Value::new(&i.to_string()));
+        }
     }
-
-    fn build_3_level(dir: &TempDir) -> (DBServer, super::DBClient, i32) {
+    fn build_3_level(dir: &TempDir, number: usize) -> (DBServer, super::DBClient) {
         let mut c = Config::new();
         c.memtable_size_limit = 1000;
         let db = DBServer::new_with_confing(dir.path(), c).unwrap();
         let mut client = db.new_client().unwrap();
-        let number = 1000;
         for i in 0..number {
             let key = Key::new(&i.to_string());
             let value = Value::new(&i.to_string());
             client.put(&key, value).unwrap();
         }
 
-        (db, client, number)
+        (db, client)
     }
 
     #[test]
@@ -496,6 +606,7 @@ mod test {
             let value_res = db_client.get(&Key::new(&key));
             assert_eq!(value_res.unwrap().unwrap(), Value::new(&i.to_string()))
         }
+        drop(db_client);
         db_server.close().unwrap();
     }
 
@@ -533,15 +644,8 @@ mod test {
                     let mut key = thread_id.to_string();
                     key.push_str("_");
                     key.push_str(&i.to_string());
-                    debug!("key is {:}", key);
                     let value_res = db_client.get(&Key::new(&key));
-                    if value_res.is_err() {
-                        panic!("get key error {:?}", value_res);
-                    }
-                    if value_res.unwrap().is_none() {
-                        error!("key not found {:?}", key);
-                    }
-                    // assert_eq!(value_res.unwrap().unwrap(), Value::new(&i.to_string()))
+                    assert_eq!(value_res.unwrap().unwrap(), Value::new(&i.to_string()))
                 }
             });
             handles.push(handle);
