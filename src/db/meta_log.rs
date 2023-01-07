@@ -14,6 +14,16 @@ pub struct MetaLogIter {
     remain_data_len: usize,
 }
 
+impl MetaLogIter {
+    pub fn new(file: File) -> Self {
+        let size = file.metadata().unwrap().len();
+        MetaLogIter {
+            file,
+            remain_data_len: size as usize,
+        }
+    }
+}
+
 impl Iterator for MetaLogIter {
     type Item = Result<Vec<u8>>;
 

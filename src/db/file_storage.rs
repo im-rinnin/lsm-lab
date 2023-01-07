@@ -32,17 +32,19 @@ impl FileStorageManager {
                     let file_name = p.file_name().ok_or(Error::msg("file_name not found"))?;
                     let file_id = file_name
                         .to_str()
-                        .ok_or(Error::msg("file name to id fail"))?
-                        .parse::<u32>()
-                        .unwrap();
-                    file_names.push(file_id);
+                        .ok_or(Error::msg("file name to str fail"))?
+                        .parse::<u32>();
+                    if let Ok(id) = file_id {
+                        file_names.push(id);
+                    }
                 }
                 Err(e) => {
                     return Err(Error::new(e));
                 }
             }
         }
-        let max_file_id = file_names.iter().max().unwrap();
+        let max_file_id = file_names.iter().max().unwrap_or(&START_ID);
+        
         Ok(FileStorageManager {
             home_path,
             next_file_id: max_file_id + 1,
@@ -108,6 +110,7 @@ mod test {
     use std::collections::HashSet;
     use std::io::{Seek, SeekFrom};
     use std::path::Path;
+    use std::sync::{Arc, Mutex};
     use std::thread;
 
     use byteorder::{ReadBytesExt, WriteBytesExt};

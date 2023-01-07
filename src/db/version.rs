@@ -123,6 +123,9 @@ impl Version {
         return Ok(Some(level_change));
     }
 
+    pub fn get_str(&self, key: &str) -> Result<Option<Value>> {
+        self.get(&Key::new(key))
+    }
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
         // call get key from level 0 to level n
         if self.depth() == 0 {

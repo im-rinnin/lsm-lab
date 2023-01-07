@@ -1,4 +1,4 @@
-use log::{debug, info, trace};
+use log::{debug, error, info, trace};
 use lru::LruCache;
 use rmp_serde::encode::Error;
 use std::borrow::{Borrow, BorrowMut};
@@ -31,7 +31,11 @@ use crate::db::sstable::SSTable;
 use crate::db::version::Version;
 
 use self::config::Config;
+use self::memtable::MemtableIter;
+use self::memtable_log::MemtableLogReader;
+use self::meta_log::MetaLogIter;
 use self::metrics::DBMetric;
+use self::sstable::SStableBlockMeta;
 
 mod common;
 mod config;
@@ -55,33 +59,21 @@ type ThreadSafeData = Arc<
         Arc<Mutex<Arc<Version>>>,
     )>,
 >;
-pub fn new_thread_safe_data(
-    config: &Config,
-    path: &Path,
-    file_manager: ThreadSafeFileManager,
-) -> ThreadSafeData {
-    let memtable = Memtable::new();
+pub fn new_sstable_cache(config: &Config) -> Arc<Mutex<LruCache<FileId, Arc<SStableBlockMeta>>>> {
     let sstable_cache = Arc::new(Mutex::new(LruCache::new(
         NonZeroUsize::new(config.sstable_meta_cache).unwrap(),
     )));
-    let version = Version::new(path, file_manager, sstable_cache);
-    Arc::new(RwLock::new((
-        Arc::new(Mutex::new(Arc::new(memtable))),
-        None,
-        Arc::new(Mutex::new(Arc::new(version))),
-    )))
+    sstable_cache
 }
 
-// todo thread safe design multiple thread access
 pub struct DBServer {
     path: PathBuf,
     data: ThreadSafeData,
     // meta_log: MetaLog,
     write_request_sender: Sender<WriteRequest>,
-    file_manager: ThreadSafeFileManager,
     config: Config,
     metrics: Arc<DBMetric>,
-    thread_handle: Vec<JoinHandle<Result<()>>>,
+    thread_handles: Vec<JoinHandle<Result<()>>>,
 }
 
 pub struct DBClient {
@@ -153,12 +145,62 @@ impl DBClient {
 }
 
 impl DBServer {
-    pub fn open_db(path: &Path) -> Result<Self> {
-        //     open memtable_log
-        //     build version from log
+    pub fn open_db(path: PathBuf, config: Config) -> Result<Self> {
+        let file_storage = FileStorageManager::from(path.clone())?;
 
-        // call init routine
-        todo!()
+        let thread_safe_file_storage = Arc::new(Mutex::new(file_storage));
+
+        let memtable = Self::build_memtable(&path, &config)?;
+        let veresion = Self::build_version(&path, &config, thread_safe_file_storage)?;
+
+        let file_manager = Arc::new(Mutex::new(FileStorageManager::from(path.clone())?));
+        Self::new_impl(path, config, file_manager, memtable, veresion)
+    }
+
+    fn build_memtable(path: &Path, config: &Config) -> Result<Memtable> {
+        let memtable_log_path = path.to_path_buf().join(&config.memtable_log_file_path);
+        let memtable_log_file = File::open(memtable_log_path)?;
+        let memtable_log_iter = MemtableLogReader::new(memtable_log_file)?;
+
+        let memtable = Memtable::new();
+        for (k, v) in memtable_log_iter {
+            memtable.insert(&k, &v)
+        }
+        Ok(memtable)
+    }
+    fn build_version(
+        path: &Path,
+        config: &Config,
+        file_storage: ThreadSafeFileManager,
+    ) -> Result<Version> {
+        // build version from log
+        let home_path = PathBuf::from(path);
+        let meta_file_path = path.join(&config.meta_log_file_name);
+        let meta_file = File::open(meta_file_path).unwrap();
+        let iter = MetaLogIter::new(meta_file);
+
+        // build version
+        let mut level_changes = Vec::new();
+        for data_res in iter {
+            match data_res {
+                Err(err) => {
+                    error!("fail to get meta data {:}", err);
+                    return Err(err);
+                }
+                Ok(data) => {
+                    let level_change: LevelChange = serde_json::from_slice(&data)?;
+                    level_changes.push(level_change);
+                }
+            }
+        }
+
+        let sstable_cache = new_sstable_cache(&config);
+
+        let mut iter = level_changes.into_iter();
+
+        let version: Version =
+            Version::from(&mut iter, home_path.clone(), file_storage, sstable_cache)?;
+        Ok(version)
     }
 
     pub fn new_client(&self) -> Result<DBClient> {
@@ -170,39 +212,52 @@ impl DBServer {
             write_request_sender: self.write_request_sender.clone(),
         })
     }
-    pub fn new(path: &Path) -> Result<Self> {
-        let default_config = Config::new();
-        Self::new_with_confing(path, default_config)
+    pub fn new(path: PathBuf) -> Result<Self> {
+        let config = Config::new();
+        Self::new_with_confing(path, config)
     }
-    pub fn new_with_confing(path: &Path, default_config: Config) -> Result<Self> {
-        // create open memtable_log
-        let meta_log_file_path = path.join(&default_config.meta_log_file_name);
-        let meta_log_file = File::create(meta_log_file_path)?;
-        let meta_log = MetaLog::new(meta_log_file);
+    pub fn new_with_confing(path: PathBuf, c: Config) -> Result<Self> {
+        let default_config = Config::new();
 
+        // create open memtable_log
+        let memtable = Memtable::new();
+        let cache = new_sstable_cache(&default_config);
+        let file_manager = Arc::new(Mutex::new(FileStorageManager::new(&path)));
+        let version = Version::new(&path, file_manager.clone(), cache);
+
+        Self::new_impl(path, default_config, file_manager, memtable, version)
+    }
+
+    pub fn new_impl(
+        path: PathBuf,
+        default_config: Config,
+        file_strorage: ThreadSafeFileManager,
+        memtable: Memtable,
+        version: Version,
+    ) -> Result<Self> {
         let memtable_log_path = path.join(PathBuf::from(&default_config.memtable_log_file_path));
         let memtable_log_file = File::create(memtable_log_path)?;
 
+        let meta_log_file_path = path.join(&default_config.meta_log_file_name);
+        let meta_log_file = File::create(meta_log_file_path)?;
+        let meta_log = MetaLog::new(meta_log_file);
         // create file_manager
-        let file_storage = Arc::new(Mutex::new(FileStorageManager::new(path)));
+        // let file_storage = Arc::new(Mutex::new(FileStorageManager::new(path)));
+
+        let cache = new_sstable_cache(&default_config);
 
         // init data
-        let data = new_thread_safe_data(&default_config, path, file_storage.clone());
+        let data = Arc::new(RwLock::new((
+            Arc::new(Mutex::new(Arc::new(memtable))),
+            None,
+            Arc::new(Mutex::new(Arc::new(version))),
+        )));
 
         let (sender, recv) = std::sync::mpsc::channel();
 
         let metric = Arc::new(DBMetric::new());
 
-        let mut db = DBServer {
-            path: PathBuf::from(path),
-            data: data.clone(),
-            // meta_log: meta_log,
-            file_manager: file_storage.clone(),
-            config: default_config.clone(),
-            write_request_sender: sender,
-            metrics: metric.clone(),
-            thread_handle: Vec::new(),
-        };
+        let mut thread_handles = Vec::new();
 
         // call init routine
         let mutex = Mutex::new(true);
@@ -217,8 +272,8 @@ impl DBServer {
 
         let compact_routine_join_handle = thread::spawn(move || {
             Self::compact_routine(
-                data,
-                file_storage,
+                data_clone,
+                file_strorage,
                 condition_pair_clone,
                 meta_log,
                 start_compact_recv,
@@ -227,12 +282,14 @@ impl DBServer {
         });
 
         let metric_clone = metric.clone();
+        let data_clone = data.clone();
+        let config_clone = default_config.clone();
         let write_routine_join = thread::spawn(move || {
             let res = Self::write_routine(
                 data_clone,
                 recv,
                 condition_pair,
-                default_config,
+                config_clone,
                 start_compact_sender,
                 metric_clone,
                 memtable_log_file,
@@ -241,8 +298,17 @@ impl DBServer {
             res
         });
 
-        db.thread_handle.push(write_routine_join);
-        db.thread_handle.push(compact_routine_join_handle);
+        thread_handles.push(write_routine_join);
+        thread_handles.push(compact_routine_join_handle);
+
+        let db = DBServer {
+            path: PathBuf::from(path),
+            data: data.clone(),
+            config: default_config,
+            write_request_sender: sender,
+            metrics: metric.clone(),
+            thread_handles,
+        };
 
         Ok(db)
     }
@@ -250,7 +316,7 @@ impl DBServer {
     pub fn close(mut self) -> Result<()> {
         info!("close db");
         drop(self.write_request_sender);
-        while let Some(h) = self.thread_handle.pop() {
+        while let Some(h) = self.thread_handles.pop() {
             // TODO: log
             let error = h.join();
         }
@@ -527,6 +593,7 @@ fn save_to_log(
 
 #[cfg(test)]
 mod test {
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
@@ -542,29 +609,69 @@ mod test {
     use crate::db::DBServer;
 
     use super::common::init_test_log_as_debug;
+    use super::file_storage::FileStorageManager;
     use super::DBClient;
 
-    // #[test]
+    #[test]
+    fn test_reopen_db() {
+        let dir = TempDir::new().unwrap();
+        let number = 1000;
+        let (server, _, config) = build_3_level(&dir, number);
+        server.close().unwrap();
+
+        let server = DBServer::open_db(dir.into_path(), config).unwrap();
+        let client = server.new_client().unwrap();
+
+        for i in 0..number {
+            let res = client.get_str(&i.to_string());
+            assert_eq!(res.unwrap().unwrap(), Value::new(&i.to_string()));
+        }
+    }
+
+    #[test]
+    fn test_build_memtable_and_version_in_db_reopen() {
+        let dir = TempDir::new().unwrap();
+
+        let number = 1000;
+        let (server, _, config) = build_3_level(&dir, number);
+        server.close().unwrap();
+        let file_storage = FileStorageManager::from(dir.path().to_path_buf()).unwrap();
+        let thread_safe_storage = Arc::new(Mutex::new(file_storage));
+        let memtable = DBServer::build_memtable(dir.path(), &config).unwrap();
+        let version = DBServer::build_version(dir.path(), &config, thread_safe_storage).unwrap();
+
+        for i in 0..number {
+            let res = memtable.get_str(&i.to_string());
+            if let Some(v) = res {
+                assert_eq!(v, Value::new(&i.to_string()));
+            } else {
+                let res = version.get_str(&i.to_string()).unwrap();
+                assert!(res.is_some());
+                assert_eq!(res.unwrap(), Value::new(&i.to_string()));
+            }
+        }
+    }
+
     fn test_db_build_and_reopen() {
         //     build db from path
         let dir = TempDir::new().unwrap();
         let number = 1000;
-        let (db_server, _) = build_3_level(&dir, number);
+        let (db_server, _, config) = build_3_level(&dir, number);
 
         db_server.close().unwrap();
 
         let path = dir.into_path();
-        let db_server = DBServer::open_db(&path).unwrap();
+        let db_server = DBServer::open_db(path, config).unwrap();
         let client = db_server.new_client().unwrap();
         for i in 0..number {
             let res = client.get_str(&i.to_string()).unwrap().unwrap();
             assert_eq!(res, Value::new(&i.to_string()));
         }
     }
-    fn build_3_level(dir: &TempDir, number: usize) -> (DBServer, super::DBClient) {
+    fn build_3_level(dir: &TempDir, number: usize) -> (DBServer, super::DBClient, Config) {
         let mut c = Config::new();
         c.memtable_size_limit = 1000;
-        let db = DBServer::new_with_confing(dir.path(), c).unwrap();
+        let db = DBServer::new_with_confing(dir.path().to_path_buf(), c.clone()).unwrap();
         let mut client = db.new_client().unwrap();
         for i in 0..number {
             let key = Key::new(&i.to_string());
@@ -572,7 +679,7 @@ mod test {
             client.put(&key, value).unwrap();
         }
 
-        (db, client)
+        (db, client, c)
     }
 
     #[test]
@@ -585,7 +692,7 @@ mod test {
 
         let mut c = Config::new();
         c.memtable_size_limit = 1000;
-        let db_server = DBServer::new_with_confing(dir_path, c).unwrap();
+        let db_server = DBServer::new_with_confing(dir_path.to_path_buf(), c).unwrap();
         let mut db_client = db_server.new_client().unwrap();
         let number = 1150;
         for i in 0..number {
@@ -622,7 +729,7 @@ mod test {
         let mut c = Config::new();
         c.memtable_size_limit = 1000;
 
-        let db_server = DBServer::new_with_confing(dir_path, c).unwrap();
+        let db_server = DBServer::new_with_confing(dir_path.to_path_buf(), c).unwrap();
         //     create 3 thread
         let mut handles = Vec::new();
         for thread_id in 0..1 {

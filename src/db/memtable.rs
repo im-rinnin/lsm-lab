@@ -39,6 +39,10 @@ impl Memtable {
     pub fn insert(&self, key: &Key, value: &Value) {
         self.hash_map.insert(key.clone(), Some(value.clone()));
     }
+    pub fn get_str(&self, key: &str) -> Option<Value> {
+        self.get(&Key::new(key))
+    }
+
     pub fn get(&self, key: &Key) -> Option<Value> {
         if let Some(i) = self.hash_map.get(key) {
             if let Some(j) = &(*i) {

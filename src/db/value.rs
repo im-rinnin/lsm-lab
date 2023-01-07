@@ -2,7 +2,7 @@ use core::slice;
 use std::fmt::{Display, Formatter};
 use std::slice::from_raw_parts;
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Eq, PartialEq, Debug, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct Value {
