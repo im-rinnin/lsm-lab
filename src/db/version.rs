@@ -19,7 +19,7 @@ use crate::db::meta_log::{MetaLog, MetaLogIter};
 use crate::db::sstable::SSTable;
 use crate::db::value::Value;
 
-use super::metrics::DBMetric;
+use super::db_metrics::DBMetric;
 
 // all sstable meta
 // immutable, thread safe,create new version after insert new sstable/compact

@@ -1,5 +1,7 @@
+use ::metrics::increment_counter;
 use log::{debug, error, info, trace};
 use lru::LruCache;
+use metrics::{absolute_counter, gauge};
 use rmp_serde::encode::Error;
 use std::borrow::{Borrow, BorrowMut};
 use std::cell::RefCell;
@@ -23,6 +25,7 @@ use key::Key;
 use memtable::Memtable;
 use value::Value;
 
+use crate::db::db_metrics::{CURRENT_LEVEL_DEPTH, READ_REQUEST_COUNT, WRITE_REQUEST_COUNT};
 use crate::db::file_storage::{FileId, FileStorageManager, ThreadSafeFileManager};
 use crate::db::level::{Level, LevelChange, SStableFileMeta};
 use crate::db::memtable_log::MemtableLog;
@@ -31,21 +34,21 @@ use crate::db::sstable::SSTable;
 use crate::db::version::Version;
 
 use self::config::Config;
+use self::db_metrics::{DBMetric, TimeRecorder, WRITE_REQUEST_SUM_TIME};
 use self::memtable::MemtableIter;
 use self::memtable_log::MemtableLogReader;
 use self::meta_log::MetaLogIter;
-use self::metrics::DBMetric;
 use self::sstable::SStableBlockMeta;
 
 mod common;
 mod config;
+mod db_metrics;
 mod file_storage;
 mod key;
 mod level;
 mod memtable;
 mod memtable_log;
 mod meta_log;
-mod metrics;
 mod sstable;
 mod value;
 
@@ -112,6 +115,8 @@ impl DBClient {
     }
 
     pub fn get(&self, key: &Key) -> Result<Option<Value>> {
+        increment_counter!(READ_REQUEST_COUNT);
+
         let (memtable, immutable_memtable, version) = get_current_data(&self.data);
         // search in current memtable
         let res = memtable.get(&key);
@@ -133,6 +138,7 @@ impl DBClient {
     }
 
     pub fn put(&mut self, key: &Key, value: Value) -> Result<()> {
+        let time_recorder = TimeRecorder::new(WRITE_REQUEST_SUM_TIME);
         let write_request = WriteRequest {
             key: key.clone(),
             value,
@@ -217,15 +223,14 @@ impl DBServer {
         Self::new_with_confing(path, config)
     }
     pub fn new_with_confing(path: PathBuf, c: Config) -> Result<Self> {
-        let default_config = Config::new();
 
         // create open memtable_log
         let memtable = Memtable::new();
-        let cache = new_sstable_cache(&default_config);
+        let cache = new_sstable_cache(&c);
         let file_manager = Arc::new(Mutex::new(FileStorageManager::new(&path)));
         let version = Version::new(&path, file_manager.clone(), cache);
 
-        Self::new_impl(path, default_config, file_manager, memtable, version)
+        Self::new_impl(path, c, file_manager, memtable, version)
     }
 
     pub fn new_impl(
@@ -443,6 +448,7 @@ impl DBServer {
                 // set version
                 let mut current_version = version.lock().unwrap();
                 debug!("set version to {:?}", new_version_arc);
+                gauge!(CURRENT_LEVEL_DEPTH, new_version_arc.depth() as f64);
                 new_version_arc.record_metrics(metric.as_ref());
                 *current_version = new_version_arc.clone();
                 //     unlock data
@@ -470,6 +476,7 @@ impl DBServer {
                     let mut current_verison = version.lock().unwrap();
                     let new_version = current_verison.apply_change(level_change);
                     debug!("set version to {:?}", new_version);
+                    gauge!(CURRENT_LEVEL_DEPTH, new_version_arc.depth() as f64);
                     new_version.record_metrics(&metric);
                     *current_verison = Arc::new(new_version);
                     new_version_arc = current_verison.clone();
@@ -527,10 +534,12 @@ fn write_to_memtable(
             thread::sleep(Duration::from_millis(20));
         }
         let send_res = request.finish.send(());
+        increment_counter!(WRITE_REQUEST_COUNT);
     }
+    debug!("current memtable size {:}",*memtable_size);
     // check size
     if *memtable_size > config.memtable_size_limit {
-        info!("memtable write size limit  try to start compact");
+        info!("memtable write size limit try to start compact");
         return true;
     }
     return false;
@@ -609,6 +618,7 @@ mod test {
     use crate::db::DBServer;
 
     use super::common::init_test_log_as_debug;
+    use super::db_metrics::init_metric;
     use super::file_storage::FileStorageManager;
     use super::DBClient;
 
@@ -651,23 +661,6 @@ mod test {
             }
         }
     }
-
-    fn test_db_build_and_reopen() {
-        //     build db from path
-        let dir = TempDir::new().unwrap();
-        let number = 1000;
-        let (db_server, _, config) = build_3_level(&dir, number);
-
-        db_server.close().unwrap();
-
-        let path = dir.into_path();
-        let db_server = DBServer::open_db(path, config).unwrap();
-        let client = db_server.new_client().unwrap();
-        for i in 0..number {
-            let res = client.get_str(&i.to_string()).unwrap().unwrap();
-            assert_eq!(res, Value::new(&i.to_string()));
-        }
-    }
     fn build_3_level(dir: &TempDir, number: usize) -> (DBServer, super::DBClient, Config) {
         let mut c = Config::new();
         c.memtable_size_limit = 1000;
@@ -684,7 +677,9 @@ mod test {
 
     #[test]
     fn test_simple_set_and_get() {
-        // init_test_log_as_debug();
+        init_test_log_as_debug();
+        // init_test_log(log::LevelFilter::Info);
+        let exporter = init_metric();
 
         //     new db
         let dir = TempDir::new().unwrap();
@@ -694,7 +689,7 @@ mod test {
         c.memtable_size_limit = 1000;
         let db_server = DBServer::new_with_confing(dir_path.to_path_buf(), c).unwrap();
         let mut db_client = db_server.new_client().unwrap();
-        let number = 1150;
+        let number = 2000;
         for i in 0..number {
             // add 0 to make key enough long to trigger bug
             let mut key = String::from("0");
@@ -715,12 +710,14 @@ mod test {
         }
         drop(db_client);
         db_server.close().unwrap();
+        exporter.log_current_metric();
     }
 
     // use 3 thread set and get in different keys
     #[test]
     fn test_db_multiple_thread_get_set() {
-        // init_test_log_as_debug();
+        init_test_log(log::LevelFilter::Info);
+        let exporter = init_metric();
 
         //     new db
         let dir = TempDir::new().unwrap();
@@ -762,5 +759,6 @@ mod test {
             handle.join().unwrap();
         }
         db_server.close().unwrap();
+        exporter.log_current_metric();
     }
 }

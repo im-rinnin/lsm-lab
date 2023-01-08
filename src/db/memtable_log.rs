@@ -9,6 +9,7 @@ use std::io::{Read, Seek, Write};
 use crate::db::key::Key;
 use crate::db::value::Value;
 
+use super::db_metrics::TimeRecorder;
 use super::key::KEY_SIZE_LIMIT;
 use super::value::VALUE_SIZE_LIMIT;
 
@@ -36,7 +37,8 @@ impl MemtableLog {
         Ok(())
     }
     pub fn sync_all(&mut self) -> Result<()> {
-        self.file.sync_all()?;
+        let time = TimeRecorder::new("memtable_log.flush_time");
+        self.file.sync_data()?;
         Ok(())
     }
 }
@@ -78,12 +80,20 @@ mod test {
 
     use tempfile::{tempdir, tempfile};
 
-    use crate::db::{key::Key, memtable::MemtableIter, value::Value};
+    use crate::db::{
+        common::init_test_log_as_debug,
+        db_metrics::{init_metric, TimeRecorder},
+        key::Key,
+        memtable::MemtableIter,
+        value::Value,
+    };
 
     use super::{MemtableLog, MemtableLogReader};
 
     #[test]
     fn simple_test() {
+        init_test_log_as_debug();
+        let r = init_metric();
         let dir = tempdir().unwrap();
         let path = dir.into_path().join("test");
         let file = File::create(&path).unwrap();
@@ -98,10 +108,17 @@ mod test {
         log.add(&key_1, &value_1).unwrap();
         log.add(&key_2, &value_2).unwrap();
 
+        log.sync_all().unwrap();
+
         let iter = MemtableLogReader::new(File::open(&path).unwrap()).unwrap();
 
         for (k, v) in iter {
             assert_eq!(k.data(), v.data())
         }
+        for i in 0..100 {
+            log.add(&key_1, &value_1).unwrap();
+            log.sync_all();
+        }
+        r.log_current_metric();
     }
 }
