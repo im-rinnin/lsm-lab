@@ -18,6 +18,8 @@ use crate::db::memtable::Memtable;
 use crate::db::sstable::{SSTable, SStableBlockMeta, SStableIter};
 use crate::db::value::{Value, ValueSlice};
 
+use super::common::ValueWithTag;
+
 pub type SSTableBlockMetaCache = LruCache<FileId, Arc<SStableBlockMeta>>;
 pub type ThreadSafeSSTableMetaCache = Arc<Mutex<SSTableBlockMetaCache>>;
 
@@ -72,7 +74,7 @@ impl Level {
             file_manager,
         }
     }
-    pub fn get_in_level_0(&self, key: &Key) -> Result<Option<Value>> {
+    pub fn get_in_level_0(&self, key: &Key) -> Result<Option<ValueWithTag>> {
         assert!(!self.sstable_file_metas.is_empty());
 
         for meta in &self.sstable_file_metas {
@@ -84,7 +86,7 @@ impl Level {
         }
         Ok(None)
     }
-    pub fn get(&self, key: &Key) -> Result<Option<Value>> {
+    pub fn get(&self, key: &Key) -> Result<Option<ValueWithTag>> {
         assert!(!self.sstable_file_metas.is_empty());
 
         if self.last_key().lt(key) {
@@ -390,16 +392,16 @@ mod test {
         );
 
         let res = level.get_in_level_0(&Key::new("12")).unwrap();
-        assert_eq!(res, Some(Value::new("12")));
+        assert_eq!(res, Some(Some(Value::new("12"))));
 
         let res = level.get_in_level_0(&Key::new("16")).unwrap();
-        assert_eq!(res, Some(Value::new("a")));
+        assert_eq!(res, Some(Some(Value::new("a"))));
 
         let res = level.get_in_level_0(&Key::new("19")).unwrap();
-        assert_eq!(res, Some(Value::new("19")));
+        assert_eq!(res, Some(Some(Value::new("19"))));
 
         let res = level.get_in_level_0(&Key::new("29")).unwrap();
-        assert_eq!(res, Some(Value::new("29")));
+        assert_eq!(res, Some(Some(Value::new("29"))));
 
         let res = level.get_in_level_0(&Key::new("1")).unwrap();
         assert!(res.is_none());
@@ -410,19 +412,19 @@ mod test {
         let level = build_level();
         assert_eq!(
             Value::new("126"),
-            level.get(&Key::new("126")).unwrap().unwrap()
+            level.get(&Key::new("126")).unwrap().unwrap().unwrap()
         );
         assert_eq!(
             Value::new("226"),
-            level.get(&Key::new("226")).unwrap().unwrap()
+            level.get(&Key::new("226")).unwrap().unwrap().unwrap()
         );
         assert_eq!(
             Value::new("399"),
-            level.get(&Key::new("399")).unwrap().unwrap()
+            level.get(&Key::new("399")).unwrap().unwrap().unwrap()
         );
         assert_eq!(
             Value::new("305"),
-            level.get(&Key::new("305")).unwrap().unwrap()
+            level.get(&Key::new("305")).unwrap().unwrap().unwrap()
         );
         assert!(level.get(&Key::new("526")).unwrap().is_none());
         assert!(level.get(&Key::new("303")).unwrap().is_none());

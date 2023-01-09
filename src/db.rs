@@ -92,8 +92,20 @@ pub struct DBClient {
 
 pub struct WriteRequest {
     key: Key,
-    value: Value,
+    value: Option<Value>,
     finish: Sender<()>,
+}
+
+impl WriteRequest {
+    pub fn size(&self) -> usize {
+        let key_size = self.key.len();
+        let value_size = if let Some(v) = &self.value {
+            v.len()
+        } else {
+            0
+        };
+        key_size + value_size
+    }
 }
 
 // TODO: use myerror create
@@ -127,15 +139,23 @@ impl DBClient {
         let res = memtable.get(&key);
         if res.is_some() {
             increment_counter!(READ_HIT_MEMTABLE_COUNTER);
-            return Ok(res);
+            if let Some(v) = res.unwrap() {
+                return Ok(Some(v));
+            } else {
+                return Ok(None);
+            }
         }
 
         // search in immutable memtable
         if let Some(memtable) = immutable_memtable.as_deref() {
             let res = memtable.get(key);
-            if let Some(value) = res {
+            if res.is_some() {
                 increment_counter!(READ_HIT_MEMTABLE_COUNTER);
-                return Ok(Some(value));
+                if let Some(v) = res.unwrap() {
+                    return Ok(Some(v));
+                } else {
+                    return Ok(None);
+                }
             }
         }
 
@@ -144,11 +164,18 @@ impl DBClient {
         res
     }
 
+    pub fn delete(&mut self, key: &Key) -> Result<()> {
+        self.put_impl(key, None)
+    }
+
     pub fn put(&mut self, key: &Key, value: Value) -> Result<()> {
+        self.put_impl(key, Some(value))
+    }
+    fn put_impl(&mut self, key: &Key, value: Option<Value>) -> Result<()> {
         let time_recorder = TimeRecorder::new(WRITE_REQUEST_TIME);
         let write_request = WriteRequest {
             key: key.clone(),
-            value,
+            value: value,
             finish: self.finish_notify_sender.clone(),
         };
         self.write_request_sender.send(write_request).unwrap();
@@ -534,8 +561,8 @@ fn write_to_memtable(
     drop(lock_result);
     // write data to memtable
     while let Some(request) = request_buffer.pop() {
-        memtable.insert(&request.key, &request.value);
-        *memtable_size += request.value.len() + request.key.len();
+        memtable.insert_option_value(&request.key, &request.value);
+        *memtable_size += request.size();
 
         // TODO: log error;
         let current_level_0_len = metric.get_level_n_file_number(0);
@@ -593,7 +620,7 @@ fn save_to_log(
             }
             Ok(request) => {
                 trace!("received write request");
-                let request_size = request.key.len() + request.value.len();
+                let request_size = request.size();
                 write_size_count += request_size;
                 memtable_log.add(&request.key, &request.value)?;
                 request_buffer.push(request);
@@ -629,6 +656,13 @@ mod test {
     use super::file_storage::FileStorageManager;
     use super::DBClient;
 
+    fn build_config_for_test() -> Config {
+        let mut c = Config::new();
+        // use small memetable to make more compact and depth level easier
+        c.memtable_size_limit = 10;
+        c
+    }
+
     #[test]
     fn test_reopen_db() {
         let dir = TempDir::new().unwrap();
@@ -647,8 +681,6 @@ mod test {
 
     #[test]
     fn test_build_memtable_and_version_in_db_reopen() {
-        let r=init_test_log_as_debug_and_metric();
-
         let dir = TempDir::new().unwrap();
 
         let number = 1000;
@@ -662,7 +694,7 @@ mod test {
         for i in 0..number {
             let res = memtable.get_str(&i.to_string());
             if let Some(v) = res {
-                assert_eq!(v, Value::new(&i.to_string()));
+                assert_eq!(v.unwrap(), Value::new(&i.to_string()));
             } else {
                 let res = version.get_str(&i.to_string()).unwrap();
                 assert!(res.is_some());
@@ -690,11 +722,10 @@ mod test {
         let dir = TempDir::new().unwrap();
         let dir_path = dir.path();
 
-        let mut c = Config::new();
-        c.memtable_size_limit = 1000;
+        let c = build_config_for_test();
         let db_server = DBServer::new_with_confing(dir_path.to_path_buf(), c).unwrap();
         let mut db_client = db_server.new_client().unwrap();
-        let number = 2000;
+        let number = 200;
         for i in 0..number {
             // add 0 to make key enough long to trigger bug
             let mut key = String::from("0");
@@ -719,30 +750,35 @@ mod test {
 
     // use 3 thread set and get in different keys
     #[test]
-    fn test_db_multiple_thread_get_set() {
-        //     new db
+    fn test_db_multiple_thread_get_set_delete() {
         let dir = TempDir::new().unwrap();
         let dir_path = dir.path();
-
-        let mut c = Config::new();
-        c.memtable_size_limit = 1000;
-
+        let c = build_config_for_test();
         let db_server = DBServer::new_with_confing(dir_path.to_path_buf(), c).unwrap();
+        let number = 200;
+
         //     create 3 thread
         let mut handles = Vec::new();
-        for thread_id in 0..1 {
+        for thread_id in 0..3 {
             let mut db_client = db_server.new_client().unwrap();
-            let number = 1200;
             let handle = thread::spawn(move || {
-                //     for each thread do set from 1 to 1000, and check by get key
+                //     for each thread do set from 1 to 1000, delete even key in [0,to number/2) and check
                 for i in 0..number {
                     let mut key = thread_id.to_string();
                     key.push_str("_");
+                    // delete even while insert
+                    let mut delete_key = key.clone();
+                    delete_key.push_str(&(i / 2).to_string());
+
                     key.push_str(&i.to_string());
 
                     db_client
                         .put(&Key::new(&key), Value::new(&i.to_string()))
                         .unwrap();
+
+                    if (i / 2) % 2 == 0 {
+                        db_client.delete(&Key::new(&delete_key)).unwrap();
+                    }
                 }
 
                 for i in 0..number {
@@ -750,7 +786,20 @@ mod test {
                     key.push_str("_");
                     key.push_str(&i.to_string());
                     let value_res = db_client.get(&Key::new(&key));
-                    assert_eq!(value_res.unwrap().unwrap(), Value::new(&i.to_string()))
+                    if i % 2 == 0 && i < number / 2 {
+                        assert!(
+                            value_res.unwrap().is_none(),
+                            "key {:} should be deleted",
+                            key
+                        );
+                    } else {
+                        assert_eq!(
+                            value_res.unwrap().unwrap(),
+                            Value::new(&i.to_string()),
+                            "key {:} not match",
+                            key
+                        )
+                    }
                 }
             });
             handles.push(handle);
@@ -759,6 +808,7 @@ mod test {
             let handle = handles.pop().unwrap();
             handle.join().unwrap();
         }
+        assert!(db_server.depth() >= 2);
         db_server.close().unwrap();
     }
 }

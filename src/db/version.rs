@@ -21,6 +21,7 @@ use crate::db::meta_log::{MetaLog, MetaLogIter};
 use crate::db::sstable::SSTable;
 use crate::db::value::Value;
 
+use super::common::ValueWithTag;
 use super::db_metrics::{DBMetric, TimeRecorder, SSTABLE_COMPACT_TIME};
 
 // all sstable meta
@@ -137,18 +138,25 @@ impl Version {
         }
         let level_0 = self.levels.get(&0).unwrap();
         let res = level_0.get_in_level_0(key)?;
-        if let Some(v) = res {
+        if let Some(taged_value) = res {
             histogram!(READ_HIT_SSTABLE_LEVEL, 0.0);
-
-            return Ok(Some(v));
+            if let Some(v) = &taged_value {
+                return Ok(Some(v.clone()));
+            } else {
+                return Ok(None);
+            }
         }
 
         for l in 1..self.depth() {
             let level = self.levels.get(&l).unwrap();
             let res = level.get(key)?;
-            if let Some(v) = res {
+            if let Some(taged_value) = res {
                 histogram!(READ_HIT_SSTABLE_LEVEL, l as f64);
-                return Ok(Some(v));
+                if let Some(v) = &taged_value {
+                    return Ok(Some(v.clone()));
+                } else {
+                    return Ok(None);
+                }
             }
         }
         Ok(None)

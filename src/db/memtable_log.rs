@@ -29,7 +29,7 @@ impl MemtableLog {
 
         MemtableLog { buf_writer: buffer }
     }
-    pub fn add(&mut self, key: &Key, value: &Value) -> Result<()> {
+    pub fn add(&mut self, key: &Key, value: &Option<Value>) -> Result<()> {
         key.serialize(&mut Serializer::new(&mut self.buf_writer))?;
         value.serialize(&mut Serializer::new(&mut self.buf_writer))?;
         Ok(())
@@ -80,11 +80,7 @@ mod test {
 
     use tempfile::{tempdir, tempfile};
 
-    use crate::db::{
-        key::Key,
-        memtable::MemtableIter,
-        value::Value,
-    };
+    use crate::db::{key::Key, memtable::MemtableIter, value::Value};
 
     use super::{MemtableLog, MemtableLogReader};
 
@@ -103,8 +99,8 @@ mod test {
         let key_2 = Key::new("2");
         let value_2 = Value::new("2");
 
-        log.add(&key_1, &value_1).unwrap();
-        log.add(&key_2, &value_2).unwrap();
+        log.add(&key_1, &Some(value_1.clone())).unwrap();
+        log.add(&key_2, &Some(value_2)).unwrap();
 
         log.sync_all().unwrap();
 
@@ -113,10 +109,5 @@ mod test {
         for (k, v) in iter {
             assert_eq!(k.data(), v.data())
         }
-        for i in 0..100 {
-            log.add(&key_1, &value_1).unwrap();
-            log.sync_all().unwrap();
-        }
-        // r.log_current_metric();
     }
 }

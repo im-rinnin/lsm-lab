@@ -6,7 +6,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use log::{debug, info, trace};
 use serde::{Deserialize, Serialize};
 
-use crate::db::common::{KVIterItem, ValueSliceTag};
+use crate::db::common::{KVIterItem, ValueSliceTag, ValueWithTag};
 use crate::db::key::{Key, KeySlice};
 use crate::db::sstable::BLOCK_POOL_MEMORY_SIZE;
 use crate::db::value::{Value, ValueSlice};
@@ -51,15 +51,19 @@ impl Block {
         Block { content, size }
     }
 
-    pub fn find(&self, key: &Key, entry_number: usize) -> Result<Option<Value>> {
+    pub fn find(&self, key: &Key, entry_number: usize) -> Result<Option<ValueWithTag>> {
         let mut position = 0;
         let mut count = 0;
         while count < entry_number {
             count += 1;
             let (key_content, value_content) = self.read_kv_at(&mut position)?;
 
-            if key.equal_u8(key_content) && value_content.is_some() {
-                return Ok(Some(Value::from_u8(value_content.unwrap())));
+            if key.equal_u8(key_content) {
+                if let Some(v) = value_content {
+                    return Ok(Some(Some(Value::from_u8(v))));
+                } else {
+                    return Ok(Some(None));
+                }
             }
         }
         Ok(None)
@@ -164,7 +168,6 @@ impl BlockMeta {
         let size = reader.read_u32::<LittleEndian>()? as usize;
         let entry_number = reader.read_u32::<LittleEndian>()? as usize;
 
-
         Ok(BlockMeta {
             start_key,
             last_key,
@@ -263,9 +266,9 @@ pub mod test {
         for (key, is_deleted) in data.iter() {
             let res = block.find(&Key::new(&key.to_string()), number).unwrap();
             if *is_deleted {
-                assert!(res.is_none());
+                assert!(res.unwrap().is_none());
             } else {
-                assert_eq!(res.unwrap(), Value::new(&key.to_string()))
+                assert_eq!(res.unwrap().unwrap(), Value::new(&key.to_string()))
             }
         }
     }

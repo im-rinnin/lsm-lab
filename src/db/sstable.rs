@@ -17,6 +17,8 @@ use crate::db::level::SStableFileMeta;
 use crate::db::sstable::block::{Block, BlockBuilder, BlockIter, BlockMeta, BLOCK_SIZE};
 use crate::db::value::Value;
 
+use super::common::ValueWithTag;
+
 mod block;
 pub mod file_base_sstable;
 
@@ -118,7 +120,7 @@ impl SSTable {
     pub fn last_key(&self) -> &Key {
         self.sstable_metas.block_metas.last().unwrap().last_key()
     }
-    pub fn get(&self, key: &Key) -> Result<Option<Value>> {
+    pub fn get(&self, key: &Key) -> Result<Option<ValueWithTag>> {
         if self.last_key().lt(key) {
             return Ok(None);
         }
@@ -365,7 +367,11 @@ pub mod test {
         // check sstable
         for i in 0..number {
             assert_eq!(
-                sstable.get(&Key::new(&i.to_string())).unwrap().unwrap(),
+                sstable
+                    .get(&Key::new(&i.to_string()))
+                    .unwrap()
+                    .unwrap()
+                    .unwrap(),
                 Value::new(&i.to_string())
             );
         }
