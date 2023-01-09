@@ -650,7 +650,7 @@ mod test {
     use crate::db::key::Key;
     use crate::db::sstable::SSTable;
     use crate::db::value::Value;
-    use crate::db::DBServer;
+    use crate::db::{get_current_data, DBServer};
 
     use super::debug_util::init_test_log_as_debug_and_metric;
     use super::file_storage::FileStorageManager;
@@ -810,5 +810,35 @@ mod test {
         }
         assert!(db_server.depth() >= 2);
         db_server.close().unwrap();
+    }
+    // build db to 2 level ,delete all kv, check level 1, it should contains no deleted kv
+    #[test]
+    fn test_deleted_entry_prune() {
+        let dir = TempDir::new().unwrap();
+        let dir_path = dir.path();
+        let c = build_config_for_test();
+        let db_server = DBServer::new_with_confing(dir_path.to_path_buf(), c).unwrap();
+        let number = 400;
+        let mut client = db_server.new_client().unwrap();
+
+        client
+            .put(&Key::new(&0.to_string()), Value::new(&0.to_string()))
+            .unwrap();
+
+        client.delete(&Key::new(&0.to_string())).unwrap();
+
+        for i in 1..number {
+            client
+                .put(&Key::new(&i.to_string()), Value::new(&i.to_string()))
+                .unwrap();
+        }
+        assert_eq!(db_server.depth(), 2);
+
+        let (a, b, c) = get_current_data(&db_server.data);
+        let level = c.get_level_for_test(1);
+        let kvs = level.get_kvs_for_test();
+        for (k, v) in kvs {
+            assert!(v.is_some(), "key {:?} shuold be prune", k);
+        }
     }
 }

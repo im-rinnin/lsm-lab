@@ -103,7 +103,9 @@ impl Version {
         let recorder = TimeRecorder::new(SSTABLE_COMPACT_TIME);
 
         let sstable_for_compact = level.pick_file_to_compact();
-        let next_level_option = self.levels.get(&(level_number + 1));
+        let next_level_number = level_number + 1;
+        let next_level_option = self.levels.get(&(&next_level_number));
+        // next level is empty just remove sstable from current level and put them to next level
         if next_level_option.is_none() {
             let level_change = LevelChange::LevelCompact {
                 compact_from_level: level_number,
@@ -119,7 +121,10 @@ impl Version {
 
         let next_level = next_level_option.unwrap();
         // pick files  do compact
-        let compact_res = next_level.compact_sstable(vec![sstable_for_compact.clone()])?;
+
+        let next_level_is_depthest = next_level_number == self.depth() - 1;
+        let compact_res = next_level
+            .compact_sstable(vec![sstable_for_compact.clone()], next_level_is_depthest)?;
         let level_change = LevelChange::LevelCompact {
             compact_from_level: level_number,
             compact_sstable: sstable_for_compact.clone(),
@@ -160,6 +165,10 @@ impl Version {
             }
         }
         Ok(None)
+    }
+    // for test
+    pub fn get_level_for_test(&self, level: usize) -> &Level {
+        self.levels.get(&level).unwrap()
     }
 
     pub fn set_config(&mut self, config: Config) {

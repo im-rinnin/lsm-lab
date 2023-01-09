@@ -192,6 +192,7 @@ impl Level {
     pub fn compact_sstable(
         &self,
         mut input_sstables_metas: Vec<SStableFileMeta>,
+        discard_deleted_kv: bool,
     ) -> Result<CompactSStableResult> {
         let start_key: Key = input_sstables_metas
             .iter()
@@ -252,7 +253,8 @@ impl Level {
         let mut res = Vec::new();
         loop {
             let (file, file_id, _) = self.file_manager.lock().unwrap().new_file()?;
-            let (sstable_opt, has_next) = SSTable::from_iter(&mut sorted_iter, file)?;
+            let (sstable_opt, has_next) =
+                build_sstable_from_iters(&mut sorted_iter, file, discard_deleted_kv)?;
             if sstable_opt.is_none() {
                 break;
             }
@@ -288,6 +290,26 @@ impl Level {
         self.find_oldest_sstable()
     }
 
+    // for test
+    pub fn get_kvs_for_test(&self) -> Vec<(Key, Option<Value>)> {
+        let mut res = Vec::new();
+        for meta in &self.sstable_file_metas {
+            let sstable = self.get_sstable(&meta).unwrap();
+            let iter = sstable.iter().unwrap();
+            for (k, v) in iter {
+                unsafe {
+                    let value = if let Some(v_data) = v {
+                        Some(Value::from_u8(v_data.data()))
+                    } else {
+                        None
+                    };
+                    res.push((Key::from(k.data()), value))
+                }
+            }
+        }
+        res
+    }
+
     fn find_oldest_sstable(&self) -> &SStableFileMeta {
         let res = self
             .sstable_file_metas
@@ -295,6 +317,21 @@ impl Level {
             .min_by(|a, b| a.file_id.cmp(&b.file_id))
             .unwrap();
         res
+    }
+}
+
+fn build_sstable_from_iters(
+    sorted_iter: &mut SortedKVIter,
+    file: File,
+    discard_deleted_kv: bool,
+) -> Result<(Option<SSTable>, bool), anyhow::Error> {
+    if discard_deleted_kv {
+        let mut prune_deleted_kv_iter = sorted_iter.filter(|kv| kv.1.is_some());
+        let (sstable_opt, has_next) = SSTable::from_iter(&mut prune_deleted_kv_iter, file)?;
+        Ok((sstable_opt, has_next))
+    } else {
+        let (sstable_opt, has_next) = SSTable::from_iter(sorted_iter, file)?;
+        Ok((sstable_opt, has_next))
     }
 }
 
@@ -545,7 +582,7 @@ mod test {
         );
 
         let mut file_sstable = level
-            .compact_sstable(vec![a_file_meta, b_file_meta])
+            .compact_sstable(vec![a_file_meta, b_file_meta], false)
             .unwrap()
             .add_sstables;
         assert_eq!(file_sstable.len(), 1);
