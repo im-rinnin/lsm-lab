@@ -192,8 +192,3 @@ mod test {
     }
 }
 
-use simplelog::*;
-pub fn init_test_log(level: LevelFilter) {}
-pub fn init_test_log_as_debug() {
-    SimpleLogger::init(LevelFilter::Debug, Config::default()).unwrap();
-}

@@ -4,17 +4,17 @@ use rmp_serde::{Deserializer, Serializer};
 use serde::Serialize;
 use std::cmp::max;
 use std::fs::File;
-use std::io::{Read, Seek, Write};
+use std::io::{BufWriter, Read, Seek, Write};
 
 use crate::db::key::Key;
 use crate::db::value::Value;
 
+use super::db_metrics::TimeRecorder;
 use super::key::KEY_SIZE_LIMIT;
 use super::value::VALUE_SIZE_LIMIT;
 
 pub struct MemtableLog {
-    file: File,
-    buffer: Vec<u8>,
+    buf_writer: BufWriter<File>,
 }
 
 struct KVEntry {
@@ -25,18 +25,20 @@ struct KVEntry {
 
 impl MemtableLog {
     pub fn new(file: File) -> Self {
-        MemtableLog {
-            file,
-            buffer: Vec::with_capacity(KEY_SIZE_LIMIT + VALUE_SIZE_LIMIT),
-        }
+        let buffer = BufWriter::new(file);
+
+        MemtableLog { buf_writer: buffer }
     }
     pub fn add(&mut self, key: &Key, value: &Value) -> Result<()> {
-        key.serialize(&mut Serializer::new(&mut self.file))?;
-        value.serialize(&mut Serializer::new(&mut self.file))?;
+        key.serialize(&mut Serializer::new(&mut self.buf_writer))?;
+        value.serialize(&mut Serializer::new(&mut self.buf_writer))?;
         Ok(())
     }
     pub fn sync_all(&mut self) -> Result<()> {
-        self.file.sync_all()?;
+        let time = TimeRecorder::new("memtable_log.flush_time");
+        self.buf_writer.flush()?;
+        let file = self.buf_writer.get_mut();
+        file.sync_data()?;
         Ok(())
     }
 }
@@ -78,12 +80,18 @@ mod test {
 
     use tempfile::{tempdir, tempfile};
 
-    use crate::db::{key::Key, memtable::MemtableIter, value::Value};
+    use crate::db::{
+        key::Key,
+        memtable::MemtableIter,
+        value::Value,
+    };
 
     use super::{MemtableLog, MemtableLogReader};
 
     #[test]
     fn simple_test() {
+        // init_test_log_as_debug();
+        // let r = init_metric();
         let dir = tempdir().unwrap();
         let path = dir.into_path().join("test");
         let file = File::create(&path).unwrap();
@@ -98,10 +106,17 @@ mod test {
         log.add(&key_1, &value_1).unwrap();
         log.add(&key_2, &value_2).unwrap();
 
+        log.sync_all().unwrap();
+
         let iter = MemtableLogReader::new(File::open(&path).unwrap()).unwrap();
 
         for (k, v) in iter {
             assert_eq!(k.data(), v.data())
         }
+        for i in 0..100 {
+            log.add(&key_1, &value_1).unwrap();
+            log.sync_all().unwrap();
+        }
+        // r.log_current_metric();
     }
 }

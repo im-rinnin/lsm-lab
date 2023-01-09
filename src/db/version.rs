@@ -1,3 +1,4 @@
+use metrics::histogram;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
@@ -9,6 +10,7 @@ use log::info;
 
 use crate::db::config;
 use crate::db::config::Config;
+use crate::db::db_metrics::READ_HIT_SSTABLE_LEVEL;
 use crate::db::file_storage::{FileId, FileStorageManager, ThreadSafeFileManager};
 use crate::db::key::Key;
 use crate::db::level::{
@@ -19,7 +21,7 @@ use crate::db::meta_log::{MetaLog, MetaLogIter};
 use crate::db::sstable::SSTable;
 use crate::db::value::Value;
 
-use super::metrics::DBMetric;
+use super::db_metrics::{DBMetric, TimeRecorder, SSTABLE_COMPACT_TIME};
 
 // all sstable meta
 // immutable, thread safe,create new version after insert new sstable/compact
@@ -97,6 +99,8 @@ impl Version {
     }
 
     fn do_compact(&self, level_number: usize, level: &Level) -> Result<Option<LevelChange>> {
+        let recorder = TimeRecorder::new(SSTABLE_COMPACT_TIME);
+
         let sstable_for_compact = level.pick_file_to_compact();
         let next_level_option = self.levels.get(&(level_number + 1));
         if next_level_option.is_none() {
@@ -134,6 +138,8 @@ impl Version {
         let level_0 = self.levels.get(&0).unwrap();
         let res = level_0.get_in_level_0(key)?;
         if let Some(v) = res {
+            histogram!(READ_HIT_SSTABLE_LEVEL, 0.0);
+
             return Ok(Some(v));
         }
 
@@ -141,6 +147,7 @@ impl Version {
             let level = self.levels.get(&l).unwrap();
             let res = level.get(key)?;
             if let Some(v) = res {
+                histogram!(READ_HIT_SSTABLE_LEVEL, l as f64);
                 return Ok(Some(v));
             }
         }
