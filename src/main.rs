@@ -43,9 +43,18 @@ struct TestThread {
 fn main() {
     let a = 2;
     let a = 2;
-    let c=3;
-    let d =TestThread{
+    let c = 3;
+    let d = TestThread {
         a: Arc::new(Mutex::new(3)),
-        b: Arc::new(Mutex::new(3))
+        b: Arc::new(Mutex::new(3)),
     };
+    use crossbeam::channel::unbounded;
+
+    // Create a channel that can hold at most 5 messages at a time.
+    let (s, r) = unbounded();
+
+    // Can send only 5 messages without blocking.
+    for i in 0..5 {
+        s.send(i).unwrap();
+    }
 }

@@ -12,7 +12,8 @@ use std::num::{NonZeroIsize, NonZeroUsize};
 use std::ops::{Deref, DerefMut, Sub};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
+// use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
+use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError, RecvTimeoutError};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
@@ -244,7 +245,7 @@ impl DBServer {
     }
 
     pub fn new_client(&self) -> Result<DBClient> {
-        let (send, recv) = std::sync::mpsc::channel();
+        let (send, recv) = unbounded();
         Ok(DBClient {
             data: self.data.clone(),
             finish_notify_sender: send,
@@ -291,7 +292,8 @@ impl DBServer {
             Arc::new(Mutex::new(Arc::new(version))),
         )));
 
-        let (sender, recv) = std::sync::mpsc::channel();
+        // let (sender:Sender<WriteRequest>, recv:Receiver<WriteRequest>) = unbounded();
+        let (sender, recv) = unbounded();
 
         let metric = Arc::new(DBMetric::new());
 
@@ -302,7 +304,7 @@ impl DBServer {
         let convar = Condvar::new();
         let condition_pair = Arc::new((mutex, convar));
 
-        let (start_compact_sender, start_compact_recv) = sync::mpsc::channel();
+        let (start_compact_sender, start_compact_recv) = unbounded();
 
         let data_clone = data.clone();
         let condition_pair_clone = condition_pair.clone();
