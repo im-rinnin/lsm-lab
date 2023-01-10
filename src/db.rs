@@ -27,7 +27,7 @@ use value::Value;
 
 use crate::db::db_metrics::{
     COMPACT_COUNT, CURRENT_LEVEL_DEPTH, READ_HIT_MEMTABLE_COUNTER, READ_REQUEST_COUNT,
-    READ_REQUEST_TIME, WRITE_REQUEST_COUNT,
+    READ_REQUEST_TIME, WRITE_REQUEST_COUNT, WRITE_WAIT_FOR_COMAPCT,
 };
 use crate::db::file_storage::{FileId, FileStorageManager, ThreadSafeFileManager};
 use crate::db::level::{Level, LevelChange, SStableFileMeta};
@@ -44,17 +44,17 @@ use self::meta_log::MetaLogIter;
 use self::sstable::SStableBlockMeta;
 
 mod common;
-mod config;
+pub mod config;
 mod db_metrics;
-mod debug_util;
+pub mod debug_util;
 mod file_storage;
-mod key;
+pub mod key;
 mod level;
 mod memtable;
 mod memtable_log;
 mod meta_log;
 mod sstable;
-mod value;
+pub mod value;
 
 mod version;
 
@@ -204,7 +204,7 @@ impl DBServer {
 
         let memtable = Memtable::new();
         for (k, v) in memtable_log_iter {
-            memtable.insert(&k, &v)
+            memtable.insert_option_value(&k, &v)
         }
         Ok(memtable)
     }
@@ -396,6 +396,7 @@ impl DBServer {
         loop {
             if !channal_is_open {
                 info!("Channal is closed, write routine return");
+                memtable_log.sync_all()?;
                 return Ok(());
             }
             channal_is_open = save_to_log(
@@ -421,9 +422,12 @@ impl DBServer {
             let (lock, cvar) = &*compact_condition_pair;
             // wait compact finish
             let mut compact_is_finish = lock.lock().unwrap();
-            while !*compact_is_finish {
-                info!("compact is running, wait for finish");
-                compact_is_finish = cvar.wait(compact_is_finish).unwrap();
+            {
+                let r = TimeRecorder::new(WRITE_WAIT_FOR_COMAPCT);
+                while !*compact_is_finish {
+                    info!("compact is running, wait for finish");
+                    compact_is_finish = cvar.wait(compact_is_finish).unwrap();
+                }
             }
             info!("receive compact chan, compact is finished");
 
@@ -567,7 +571,7 @@ fn write_to_memtable(
         // TODO: log error;
         let current_level_0_len = metric.get_level_n_file_number(0);
         if current_level_0_len > 4 {
-            thread::sleep(Duration::from_millis(20));
+            thread::sleep(Duration::from_millis(2));
         }
         let send_res = request.finish.send(());
         increment_counter!(WRITE_REQUEST_COUNT);
@@ -599,7 +603,7 @@ fn save_to_log(
             .saturating_sub(pass_time);
 
         if rest_time.is_zero() {
-            info!("use all time, save log return");
+            trace!("use all time, save log return");
             break;
         }
 
@@ -631,7 +635,6 @@ fn save_to_log(
             }
         }
     }
-    memtable_log.sync_all()?;
 
     Ok(channel_is_open)
 }

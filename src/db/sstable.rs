@@ -8,6 +8,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use log::info;
+use metrics::Gauge;
 use serde::{Deserialize, Serialize};
 
 use crate::db::common::{KVIterItem, ValueSliceTag};
@@ -18,6 +19,7 @@ use crate::db::sstable::block::{Block, BlockBuilder, BlockIter, BlockMeta, BLOCK
 use crate::db::value::Value;
 
 use super::common::ValueWithTag;
+use super::db_metrics::TimeRecorder;
 
 mod block;
 pub mod file_base_sstable;
@@ -166,6 +168,7 @@ impl SSTable {
         mut file: File,
         limit_file_size: usize,
     ) -> Result<(Option<SSTable>, bool)> {
+        let r = TimeRecorder::new("build_sstable_from_iter");
         let mut block_builder = BlockBuilder::new();
         let mut entry_count = 0;
         let mut block_metas = Vec::new();

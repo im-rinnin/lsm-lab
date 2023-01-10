@@ -46,6 +46,9 @@ impl Value {
     pub fn from_u8(s: &[u8]) -> Self {
         Value { v: Vec::from(s) }
     }
+    pub fn from_u64(s: u64) -> Self {
+        Self::new(&s.to_string())
+    }
     pub fn new(s: &str) -> Self {
         assert!(s.len() < VALUE_SIZE_LIMIT);
         Value {

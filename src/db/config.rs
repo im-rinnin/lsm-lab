@@ -26,7 +26,7 @@ impl Config {
             level_0_len_to_slow_write_threshold: 4,
             memtable_log_file_path: String::from("memtable_log"),
             request_write_batch_size: 1 << 20,
-            request_write_buffer_wait_time: Duration::from_micros(25),
+            request_write_buffer_wait_time: Duration::from_micros(5),
         }
     }
 }

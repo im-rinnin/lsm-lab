@@ -80,6 +80,9 @@ impl Key {
     pub fn from_u32(i: u32) -> Self {
         Self::new(&i.to_string())
     }
+    pub fn from_u64(i: u64) -> Self {
+        Self::new(&i.to_string())
+    }
 
     pub fn from(s: &[u8]) -> Self {
         assert!(s.len() < KEY_SIZE_LIMIT);

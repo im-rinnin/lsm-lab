@@ -27,6 +27,8 @@ pub const SSTABLE_COMPACT_TIME: &str = "sstable_compatct.time";
 pub const READ_HIT_MEMTABLE_COUNTER: &str = "read_request.hit_memtable";
 pub const READ_HIT_SSTABLE_LEVEL: &str = "read_request.hit_sstable_level";
 
+pub const WRITE_WAIT_FOR_COMAPCT: &str = "write_request.wait_for_comapct";
+
 /////////////////////////////
 ///
 
@@ -58,15 +60,17 @@ impl HistogramFn for HistogramMetric {
 }
 impl Display for HistogramMetric {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let lock = self.histogram.lock().unwrap();
+        let histogram = self.histogram.lock().unwrap();
         write!(
             f,
-            "histogram name: {:}, avg: {:}, min {:}, max {:} ,90_percent: {:}",
+            "histogram name: {:}, avg: {:}, min {:}, max {:} ,10_p {:}, 50_p {:},90_percent: {:}",
             self.name,
-            lock.mean().unwrap(),
-            lock.minimum().unwrap(),
-            lock.maximum().unwrap(),
-            lock.percentile(90.0).unwrap()
+            histogram.mean().unwrap(),
+            histogram.minimum().unwrap(),
+            histogram.maximum().unwrap(),
+            histogram.percentile(10.0).unwrap(),
+            histogram.percentile(50.0).unwrap(),
+            histogram.percentile(90.0).unwrap(),
         )?;
         Ok(())
     }
@@ -319,7 +323,7 @@ mod test {
 
     use super::MetricRecord;
 
-    // can't registe metric more than once 
+    // can't registe metric more than once
     // #[test]
     fn test_metric() {
         let (record, exporter) = MetricRecord::new();

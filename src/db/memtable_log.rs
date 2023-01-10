@@ -1,5 +1,6 @@
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use log::{debug, info};
 use rmp_serde::{Deserializer, Serializer};
 use serde::Serialize;
 use std::cmp::max;
@@ -35,6 +36,7 @@ impl MemtableLog {
         Ok(())
     }
     pub fn sync_all(&mut self) -> Result<()> {
+        // cost too much time
         let time = TimeRecorder::new("memtable_log.flush_time");
         self.buf_writer.flush()?;
         let file = self.buf_writer.get_mut();
@@ -58,7 +60,7 @@ impl MemtableLogReader {
 }
 
 impl Iterator for MemtableLogReader {
-    type Item = (Key, Value);
+    type Item = (Key, Option<Value>);
 
     fn next(&mut self) -> Option<Self::Item> {
         let position = self.file.stream_position().unwrap();
@@ -68,7 +70,7 @@ impl Iterator for MemtableLogReader {
         }
 
         let key: Key = rmp_serde::decode::from_read(&mut self.file).unwrap();
-        let value: Value = rmp_serde::decode::from_read(&mut self.file).unwrap();
+        let value: Option<Value> = rmp_serde::decode::from_read(&mut self.file).unwrap();
 
         Some((key, value))
     }
@@ -107,7 +109,7 @@ mod test {
         let iter = MemtableLogReader::new(File::open(&path).unwrap()).unwrap();
 
         for (k, v) in iter {
-            assert_eq!(k.data(), v.data())
+            assert_eq!(k.data(), v.unwrap().data())
         }
     }
 }
