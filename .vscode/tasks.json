@@ -17,7 +17,16 @@
 				"$rustc"
 			],
 			"group": "test",
-			"label": "rust: cargo test"
+			"label": "rust: full test"
+		},
+		{
+			"label": "rust unit test ",
+			"type": "shell",
+			"command": "cargo test --lib",
+			"problemMatcher": [
+				"$rustc"
+			],
+			"group": "test",
 		},
 		{
 			"label": "coverage",
