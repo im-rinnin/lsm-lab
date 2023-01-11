@@ -18,6 +18,16 @@
 			],
 			"group": "test",
 			"label": "rust: cargo test"
+		},
+		{
+			"label": "coverage",
+			"type": "shell",
+			"command": "CARGO_INCREMENTAL=0 RUSTFLAGS='-Cinstrument-coverage' LLVM_PROFILE_FILE='./target/debug/coverage/cargo-test-%p-%m.profraw' cargo test --lib && grcov . --binary-path ./target/debug/deps/ -s . -t lcov --branch --ignore-not-existing -o target/debug/coverage/test.lcov",
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "new"
+			}
 		}
 	]
 }

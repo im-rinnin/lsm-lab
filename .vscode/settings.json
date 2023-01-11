@@ -3,5 +3,13 @@
     "files.autoSaveDelay": 1,
     "files.associations": {
         "typesizes.h": "c"
-    }
+    },
+    "coverage-gutters.coverageFileNames": [
+        "test.lcov",
+        "lcov.info",
+        "cov.xml",
+        "coverage.xml",
+        "jacoco.xml",
+        "coverage.cobertura.xml"
+    ]
 }
