@@ -22,7 +22,6 @@ use super::common::ValueWithTag;
 use super::db_metrics::TimeRecorder;
 
 mod block;
-pub mod file_base_sstable;
 
 const BLOCK_POOL_MEMORY_SIZE: usize = 2 * KEY_SIZE_LIMIT + BLOCK_SIZE;
 

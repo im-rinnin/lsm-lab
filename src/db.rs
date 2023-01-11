@@ -13,7 +13,7 @@ use std::ops::{Deref, DerefMut, Sub};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 // use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
-use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError, RecvTimeoutError};
+use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
@@ -187,12 +187,17 @@ impl DBClient {
 
 impl DBServer {
     pub fn open_db(path: PathBuf, config: Config) -> Result<Self> {
-        let file_storage = FileStorageManager::from(path.clone())?;
-
-        let thread_safe_file_storage = Arc::new(Mutex::new(file_storage));
-
         let memtable = Self::build_memtable(&path, &config)?;
-        let veresion = Self::build_version(&path, &config, thread_safe_file_storage)?;
+
+        let file_storage = FileStorageManager::from(path.clone())?;
+        let thread_safe_file_storage = Arc::new(Mutex::new(file_storage));
+        let veresion = Self::build_version(&path, &config, thread_safe_file_storage.clone())?;
+        let all_active_files = veresion.get_all_file_ids();
+        thread_safe_file_storage
+            .lock()
+            .unwrap()
+        // remove all unused sstable file
+            .prune_files(all_active_files);
 
         let file_manager = Arc::new(Mutex::new(FileStorageManager::from(path.clone())?));
         Self::new_impl(path, config, file_manager, memtable, veresion)

@@ -310,6 +310,11 @@ impl Level {
         res
     }
 
+    pub fn all_file_id(&self)->Vec<usize>{
+        // self.sstable_file_metas
+        todo!()
+    }
+
     fn find_oldest_sstable(&self) -> &SStableFileMeta {
         let res = self
             .sstable_file_metas

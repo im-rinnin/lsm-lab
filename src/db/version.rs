@@ -1,5 +1,5 @@
 use metrics::histogram;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -312,6 +312,19 @@ impl Version {
         }
         ((config.level_size_expand_factor as u32).pow(level as u32) as usize) * 1024 * 1024
             / config.sstable_file_limit
+    }
+
+    pub fn get_all_file_ids(&self) -> HashSet<FileId> {
+        todo!()
+    }
+}
+
+impl Drop for Version {
+    fn drop(&mut self) {
+        let file_ids = self.get_all_file_ids();
+        let mut file_manager = self.file_manager.lock().unwrap();
+        file_manager.release_file_ids(&file_ids).unwrap();
+        todo!()
     }
 }
 
