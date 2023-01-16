@@ -754,6 +754,7 @@ fn save_to_log(
                 memtable_log.add(&request.key, &request.value)?;
                 request_buffer.push(request);
                 if write_size_count > config.request_write_batch_size {
+                    memtable_log.flush_buf()?;
                     info!("reach write buffer size limit, save log return");
                     break;
                 }

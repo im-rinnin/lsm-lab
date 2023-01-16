@@ -35,6 +35,11 @@ impl MemtableLog {
         value.serialize(&mut Serializer::new(&mut self.buf_writer))?;
         Ok(())
     }
+
+    pub fn flush_buf(&mut self) -> Result<()> {
+        self.buf_writer.flush()?;
+        Ok(())
+    }
     pub fn sync_all(&mut self) -> Result<()> {
         // cost too much time
         let time = TimeRecorder::new("memtable_log.flush_time");
