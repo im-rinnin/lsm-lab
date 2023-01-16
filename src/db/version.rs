@@ -1,12 +1,13 @@
+use crossbeam::channel::Sender;
 use metrics::histogram;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use log::info;
+use log::{error, info};
 
 use crate::db::config;
 use crate::db::config::Config;
@@ -23,6 +24,7 @@ use crate::db::value::Value;
 
 use super::common::ValueWithTag;
 use super::db_metrics::{DBMetric, TimeRecorder, SSTABLE_COMPACT_TIME};
+use super::debug_util::dump_recv;
 
 // all sstable meta
 // immutable, thread safe,create new version after insert new sstable/compact
@@ -33,6 +35,7 @@ pub struct Version {
     file_manager: ThreadSafeFileManager,
     home_path: PathBuf,
     config: Config,
+    file_id_sender: Sender<HashSet<FileId>>,
 }
 
 impl Version {
@@ -40,6 +43,7 @@ impl Version {
         home_path: &Path,
         file_manager: ThreadSafeFileManager,
         sstable_cache: ThreadSafeSSTableMetaCache,
+        file_id_sender: Sender<HashSet<FileId>>,
     ) -> Self {
         Version {
             levels: HashMap::new(),
@@ -47,13 +51,26 @@ impl Version {
             file_manager,
             home_path: PathBuf::from(home_path),
             config: Config::new(),
+            file_id_sender,
         }
+    }
+
+    pub fn from_for_test(
+        level_change_iter: &mut dyn Iterator<Item = LevelChange>,
+        home_path: PathBuf,
+        file_manager: ThreadSafeFileManager,
+        sstable_cache: ThreadSafeSSTableMetaCache,
+    ) -> Result<Self> {
+        let (s, r) = crossbeam::channel::unbounded();
+        dump_recv(r);
+        Self::from(level_change_iter, home_path, file_manager, sstable_cache, s)
     }
     pub fn from(
         level_change_iter: &mut dyn Iterator<Item = LevelChange>,
         home_path: PathBuf,
         file_manager: ThreadSafeFileManager,
         sstable_cache: ThreadSafeSSTableMetaCache,
+        file_id_sender: Sender<HashSet<FileId>>,
     ) -> Result<Self> {
         // iter meta log,get level change
         let mut level_sstable_file_metas: HashMap<usize, Vec<SStableFileMeta>> = HashMap::new();
@@ -75,6 +92,7 @@ impl Version {
             file_manager,
             home_path,
             config: Config::new(),
+            file_id_sender,
         })
     }
 
@@ -209,6 +227,7 @@ impl Version {
             file_manager: self.file_manager.clone(),
             home_path: self.home_path.clone(),
             config: self.config.clone(),
+            file_id_sender: self.file_id_sender.clone(),
         }
     }
 
@@ -313,6 +332,24 @@ impl Version {
         ((config.level_size_expand_factor as u32).pow(level as u32) as usize) * 1024 * 1024
             / config.sstable_file_limit
     }
+
+    pub fn get_all_file_ids(&self) -> HashSet<FileId> {
+        let mut res = HashSet::new();
+        for (_, level) in &self.levels {
+            res.extend(level.get_all_file_id());
+        }
+        res
+    }
+}
+
+impl Drop for Version {
+    fn drop(&mut self) {
+        let file_ids = self.get_all_file_ids();
+        let send_res = self.file_id_sender.send(file_ids);
+        if let Err(err) = send_res {
+            error!("file_id_sender send error: {:?}", err);
+        }
+    }
 }
 
 impl Debug for Version {
@@ -343,6 +380,7 @@ mod test {
     use std::sync::{Arc, Mutex};
 
     use anyhow::Result;
+    use crossbeam::channel::{bounded, unbounded};
     use lru::LruCache;
     use tempfile::tempdir;
 
@@ -420,7 +458,7 @@ mod test {
         ];
         let mut iter = meta_log.into_iter();
 
-        let version = Version::from(
+        let version = Version::from_for_test(
             &mut iter,
             dir.into_path(),
             Arc::new(Mutex::new(file_manager)),
@@ -447,7 +485,7 @@ mod test {
         let meta_log = vec![];
         let mut iter = meta_log.into_iter();
 
-        let empty_version = Version::from(
+        let empty_version = Version::from_for_test(
             &mut iter,
             dir.into_path(),
             Arc::new(Mutex::new(file_manager)),
@@ -536,13 +574,30 @@ mod test {
     }
 
     #[test]
-    pub fn test_compact() {}
-
-    #[test]
     pub fn test_level_size_limit() {
         let config = Config::new();
         assert_eq!(Version::level_file_number_limit(0, &config), 4);
         assert_eq!(Version::level_file_number_limit(1, &config), 5);
         assert_eq!(Version::level_file_number_limit(2, &config), 50);
+    }
+    #[test]
+    pub fn test_get_file_ids() {
+        let version = build_level().unwrap();
+        let file_ids = version.get_all_file_ids();
+        assert!(file_ids.contains(&0));
+        assert!(file_ids.contains(&1));
+        assert!(file_ids.contains(&2));
+        assert!(file_ids.contains(&3));
+
+        assert_eq!(file_ids.len(), 4);
+    }
+    #[test]
+    pub fn test_version_drop_send_file_ids() {
+        let (s, r) = unbounded();
+        {
+            let mut version = build_level().unwrap();
+            version.file_id_sender = s;
+        }
+        assert_eq!(r.recv().unwrap().len(), 4);
     }
 }

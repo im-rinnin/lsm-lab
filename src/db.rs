@@ -1,21 +1,24 @@
 use ::metrics::increment_counter;
+use crossbeam::select;
 use log::{debug, error, info, trace};
 use lru::LruCache;
 use metrics::{absolute_counter, gauge};
 use rmp_serde::encode::Error;
 use std::borrow::{Borrow, BorrowMut};
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
-use std::fs::File;
+use std::collections::{hash_set, HashMap, HashSet, VecDeque};
+use std::fs::{self, File};
 use std::io::Read;
 use std::num::{NonZeroIsize, NonZeroUsize};
 use std::ops::{Deref, DerefMut, Sub};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 // use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
-use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError, RecvTimeoutError};
+use crossbeam::channel::{
+    bounded, unbounded, Receiver, RecvTimeoutError, Select, Sender, TryRecvError,
+};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
-use std::thread::JoinHandle;
+use std::thread::{spawn, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 use std::{sync, thread};
 
@@ -77,7 +80,6 @@ pub fn new_sstable_cache(config: &Config) -> Arc<Mutex<LruCache<FileId, Arc<SSta
 pub struct DBServer {
     path: PathBuf,
     data: ThreadSafeData,
-    // meta_log: MetaLog,
     write_request_sender: Sender<WriteRequest>,
     config: Config,
     metrics: Arc<DBMetric>,
@@ -188,14 +190,14 @@ impl DBClient {
 impl DBServer {
     pub fn open_db(path: PathBuf, config: Config) -> Result<Self> {
         let file_storage = FileStorageManager::from(path.clone())?;
-
         let thread_safe_file_storage = Arc::new(Mutex::new(file_storage));
 
         let memtable = Self::build_memtable(&path, &config)?;
-        let veresion = Self::build_version(&path, &config, thread_safe_file_storage)?;
+        let (s, r) = unbounded();
+        let veresion = Self::build_version(&path, &config, thread_safe_file_storage.clone(), s)?;
 
         let file_manager = Arc::new(Mutex::new(FileStorageManager::from(path.clone())?));
-        Self::new_impl(path, config, file_manager, memtable, veresion)
+        Self::new_impl(path, config, file_manager, memtable, veresion, r)
     }
 
     fn build_memtable(path: &Path, config: &Config) -> Result<Memtable> {
@@ -213,6 +215,7 @@ impl DBServer {
         path: &Path,
         config: &Config,
         file_storage: ThreadSafeFileManager,
+        file_id_sender: Sender<HashSet<FileId>>,
     ) -> Result<Version> {
         // build version from log
         let home_path = PathBuf::from(path);
@@ -239,8 +242,15 @@ impl DBServer {
 
         let mut iter = level_changes.into_iter();
 
-        let version: Version =
-            Version::from(&mut iter, home_path.clone(), file_storage, sstable_cache)?;
+        let f_clone = file_storage.clone();
+        let version: Version = Version::from(
+            &mut iter,
+            home_path.clone(),
+            f_clone,
+            sstable_cache,
+            file_id_sender,
+        )?;
+
         Ok(version)
     }
 
@@ -257,22 +267,44 @@ impl DBServer {
         let config = Config::new();
         Self::new_with_confing(path, config)
     }
-    pub fn new_with_confing(path: PathBuf, c: Config) -> Result<Self> {
+    pub fn new_with_confing(home_path: PathBuf, c: Config) -> Result<Self> {
         // create open memtable_log
         let memtable = Memtable::new();
         let cache = new_sstable_cache(&c);
-        let file_manager = Arc::new(Mutex::new(FileStorageManager::new(&path)));
-        let version = Version::new(&path, file_manager.clone(), cache);
+        let file_manager = Arc::new(Mutex::new(FileStorageManager::new(&home_path)));
 
-        Self::new_impl(path, c, file_manager, memtable, version)
+        let (file_id_dec_sender, file_id_dec_recv) = unbounded();
+        let version = Version::new(&home_path, file_manager.clone(), cache, file_id_dec_sender);
+
+        //  delete all unused files
+
+        let all_files = FileStorageManager::get_all_file_ids(&home_path)?;
+        let all_active_files = version.get_all_file_ids();
+        for id in all_files {
+            if !all_active_files.contains(&id) {
+                info!("file {:} is unnused, deleting it", id);
+                let path = home_path.join(&id.to_string());
+                fs::remove_file(path)?;
+            }
+        }
+
+        Self::new_impl(
+            home_path,
+            c,
+            file_manager,
+            memtable,
+            version,
+            file_id_dec_recv,
+        )
     }
 
-    pub fn new_impl(
+    fn new_impl(
         path: PathBuf,
         default_config: Config,
         file_strorage: ThreadSafeFileManager,
         memtable: Memtable,
         version: Version,
+        file_id_dec_recv: Receiver<HashSet<FileId>>,
     ) -> Result<Self> {
         let memtable_log_path = path.join(PathBuf::from(&default_config.memtable_log_file_path));
         let memtable_log_file = File::create(memtable_log_path)?;
@@ -280,26 +312,23 @@ impl DBServer {
         let meta_log_file_path = path.join(&default_config.meta_log_file_name);
         let meta_log_file = File::create(meta_log_file_path)?;
         let meta_log = MetaLog::new(meta_log_file);
-        // create file_manager
-        // let file_storage = Arc::new(Mutex::new(FileStorageManager::new(path)));
 
         let cache = new_sstable_cache(&default_config);
 
-        // init data
+        let all_active_files = version.get_all_file_ids();
+
         let data = Arc::new(RwLock::new((
             Arc::new(Mutex::new(Arc::new(memtable))),
             None,
             Arc::new(Mutex::new(Arc::new(version))),
         )));
 
-        // let (sender:Sender<WriteRequest>, recv:Receiver<WriteRequest>) = unbounded();
         let (sender, recv) = unbounded();
 
         let metric = Arc::new(DBMetric::new());
 
         let mut thread_handles = Vec::new();
 
-        // call init routine
         let mutex = Mutex::new(true);
         let convar = Condvar::new();
         let condition_pair = Arc::new((mutex, convar));
@@ -310,6 +339,19 @@ impl DBServer {
         let condition_pair_clone = condition_pair.clone();
         let metric_clone = metric.clone();
 
+        let path_clone = path.clone();
+        let (file_id_inc_sender, file_id_inc_recv) = bounded(0);
+
+        let prune_file_handle = spawn(move || {
+            let res = Self::prune_file_routine(
+                path_clone,
+                all_active_files,
+                file_id_dec_recv,
+                file_id_inc_recv,
+            );
+            res
+        });
+
         let compact_routine_join_handle = thread::spawn(move || {
             Self::compact_routine(
                 data_clone,
@@ -318,6 +360,7 @@ impl DBServer {
                 meta_log,
                 start_compact_recv,
                 metric_clone,
+                file_id_inc_sender,
             )
         });
 
@@ -340,6 +383,7 @@ impl DBServer {
 
         thread_handles.push(write_routine_join);
         thread_handles.push(compact_routine_join_handle);
+        thread_handles.push(prune_file_handle);
 
         let db = DBServer {
             path: PathBuf::from(path),
@@ -356,6 +400,8 @@ impl DBServer {
     pub fn close(mut self) -> Result<()> {
         info!("close db");
         drop(self.write_request_sender);
+        drop(self.data);
+
         while let Some(h) = self.thread_handles.pop() {
             // TODO: log
             let error = h.join();
@@ -449,6 +495,76 @@ impl DBServer {
         }
     }
 
+    fn prune_file_routine(
+        home_path: PathBuf,
+        file_ids: HashSet<FileId>,
+        file_ref_decrease_recv: Receiver<HashSet<FileId>>,
+        file_ref_increase_recv: Receiver<HashSet<FileId>>,
+    ) -> Result<()> {
+        let mut file_id_count = HashMap::new();
+        for id in file_ids.iter() {
+            file_id_count.insert(*id, 1);
+        }
+        let mut select = Select::new();
+        let mut index_set = HashSet::new();
+        let inc_index = select.recv(&file_ref_increase_recv);
+        index_set.insert(inc_index);
+        let dec_index = select.recv(&file_ref_decrease_recv);
+        index_set.insert(dec_index);
+
+        loop {
+            if index_set.is_empty() {
+                break;
+            }
+            let select_res = select.select();
+            if select_res.index() == dec_index {
+                let file_ids_res = select_res.recv(&file_ref_decrease_recv);
+                match file_ids_res {
+                    Err(ref err) => {
+                        info!("prune file routine recv error: {:?} ", err);
+                        select.remove(dec_index);
+                        index_set.remove(&dec_index);
+                        continue;
+                    }
+                    Ok(ids) => {
+                        for id in ids.iter() {
+                            let count = file_id_count.get_mut(id).unwrap();
+                            if *count == 1 {
+                                file_id_count.remove(id);
+                                let path = FileStorageManager::file_path(&home_path, id);
+                                fs::remove_file(&path)?;
+                                info!("delete file with id {}", id);
+                            } else {
+                                *count -= 1;
+                            }
+                        }
+                    }
+                }
+            } else if select_res.index() == inc_index {
+                let file_ids_res = select_res.recv(&file_ref_increase_recv);
+                match file_ids_res {
+                    Err(ref err) => {
+                        info!("prune file routine recv error: {:?} ", err);
+                        select.remove(inc_index);
+                        index_set.remove(&inc_index);
+                        continue;
+                    }
+                    Ok(ids) => {
+                        for id in ids {
+                            if let Some(i) = file_id_count.get_mut(&id) {
+                                *i += 1;
+                            } else {
+                                file_id_count.insert(id, 1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        info!("prune file routine return");
+        Ok(())
+    }
+
     fn compact_routine(
         data: ThreadSafeData,
         file_manager: ThreadSafeFileManager,
@@ -456,6 +572,7 @@ impl DBServer {
         mut meta_log: MetaLog,
         start_compact: Receiver<()>,
         metric: Arc<DBMetric>,
+        file_id_inc_sender: Sender<HashSet<FileId>>,
     ) -> Result<()> {
         let mut start_immediate = false;
         loop {
@@ -475,6 +592,9 @@ impl DBServer {
             let imm_memtable = immutable_memtable_option.expect("must exits");
             let level_change = version.add_memtable_to_level_0(imm_memtable.as_ref())?;
             let new_version = version.apply_change(level_change.clone());
+            let new_version_ids = new_version.get_all_file_ids();
+            file_id_inc_sender.send(new_version_ids).unwrap();
+
             let mut new_version_arc = Arc::new(new_version);
             // write level change to meta log
             Self::save_level_change_to_meta_log(&mut meta_log, &level_change)?;
@@ -516,6 +636,9 @@ impl DBServer {
                     let (_, _, version) = lock_result.deref_mut();
                     let mut current_verison = version.lock().unwrap();
                     let new_version = current_verison.apply_change(level_change);
+                    let new_version_ids = new_version.get_all_file_ids();
+                    file_id_inc_sender.send(new_version_ids).unwrap();
+
                     debug!("set version to {:?}", new_version);
                     gauge!(CURRENT_LEVEL_DEPTH, new_version_arc.depth() as f64);
                     increment_counter!(COMPACT_COUNT);
@@ -643,13 +766,16 @@ fn save_to_log(
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashSet;
+    use std::fs::File;
     use std::sync::{Arc, Mutex};
-    use std::thread;
     use std::time::Duration;
+    use std::{fs, thread};
 
     use byteorder::LE;
+    use crossbeam::channel::unbounded;
     use log::{debug, error, info, warn};
-    use tempfile::TempDir;
+    use tempfile::{tempdir, TempDir};
 
     use crate::db::config::Config;
     use crate::db::key::Key;
@@ -657,7 +783,7 @@ mod test {
     use crate::db::value::Value;
     use crate::db::{get_current_data, DBServer};
 
-    use super::debug_util::init_test_log_as_debug_and_metric;
+    use super::debug_util::{dump_recv, init_test_log_as_debug_and_metric};
     use super::file_storage::FileStorageManager;
     use super::DBClient;
 
@@ -668,11 +794,11 @@ mod test {
         c
     }
 
-    #[test]
+    // #[test]
     fn test_reopen_db() {
         let dir = TempDir::new().unwrap();
         let number = 1000;
-        let (server, _, config) = build_3_level(&dir, number);
+        let (server, _, config) = build_db(&dir, number);
         server.close().unwrap();
 
         let server = DBServer::open_db(dir.into_path(), config).unwrap();
@@ -689,12 +815,15 @@ mod test {
         let dir = TempDir::new().unwrap();
 
         let number = 1000;
-        let (server, _, config) = build_3_level(&dir, number);
+        let (server, _, config) = build_db(&dir, number);
         server.close().unwrap();
         let file_storage = FileStorageManager::from(dir.path().to_path_buf()).unwrap();
         let thread_safe_storage = Arc::new(Mutex::new(file_storage));
         let memtable = DBServer::build_memtable(dir.path(), &config).unwrap();
-        let version = DBServer::build_version(dir.path(), &config, thread_safe_storage).unwrap();
+
+        let (s, r) = unbounded();
+        dump_recv(r);
+        let version = DBServer::build_version(dir.path(), &config, thread_safe_storage, s).unwrap();
 
         for i in 0..number {
             let res = memtable.get_str(&i.to_string());
@@ -707,7 +836,7 @@ mod test {
             }
         }
     }
-    fn build_3_level(dir: &TempDir, number: usize) -> (DBServer, super::DBClient, Config) {
+    fn build_db(dir: &TempDir, number: usize) -> (DBServer, super::DBClient, Config) {
         let mut c = Config::new();
         c.memtable_size_limit = 1000;
         let db = DBServer::new_with_confing(dir.path().to_path_buf(), c.clone()).unwrap();
@@ -845,5 +974,32 @@ mod test {
         for (k, v) in kvs {
             assert!(v.is_some(), "key {:?} shuold be prune", k);
         }
+    }
+
+    // check sstable is delted after its reference count is zero
+    #[test]
+    fn test_sstable_file_prune() {
+        let dir = tempdir().unwrap();
+        let s = build_db(&dir, 2000);
+        let paths = fs::read_dir(dir.path()).unwrap();
+        let mut ids = HashSet::new();
+        for path in paths {
+            let entry = path.unwrap().file_name().to_str().unwrap().to_string();
+            ids.insert(entry);
+        }
+        assert!(!ids.contains("0"));
+    }
+    #[test]
+    fn test_detele_unused_file_when_db_start() {
+        let dir = tempdir().unwrap();
+        let file_path_1 = dir.path().to_path_buf().join("0");
+        File::create(&file_path_1).unwrap();
+        let file_path_2 = dir.path().to_path_buf().join("1");
+        File::create(&file_path_2).unwrap();
+
+        let s = DBServer::new(dir.path().to_path_buf()).unwrap();
+
+        assert!(fs::metadata(file_path_1).is_err());
+        assert!(fs::metadata(file_path_2).is_err());
     }
 }

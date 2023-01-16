@@ -11,22 +11,13 @@
 			"label": "rust: cargo check"
 		},
 		{
-			"type": "cargo",
-			"command": "test",
-			"problemMatcher": [
-				"$rustc"
-			],
-			"group": "test",
-			"label": "rust: full test"
-		},
-		{
 			"label": "rust unit test ",
 			"type": "shell",
 			"command": "cargo test --lib",
 			"problemMatcher": [
 				"$rustc"
 			],
-			"group": "test",
+			"group": "test"
 		},
 		{
 			"label": "coverage",
@@ -37,6 +28,12 @@
 				"reveal": "always",
 				"panel": "new"
 			}
-		}
+		},
+		{
+			"label": "rust: cargo full test",
+			"type": "shell",
+			"command": "cargo test ",
+			"group": "test"
+		},
 	]
 }
