@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -310,6 +311,14 @@ impl Level {
         res
     }
 
+    pub fn get_all_file_id(&self) -> HashSet<FileId> {
+        let mut res = HashSet::new();
+        for meta in self.sstable_file_metas.iter() {
+            res.insert(meta.file_id());
+        }
+        res
+    }
+
     fn find_oldest_sstable(&self) -> &SStableFileMeta {
         let res = self
             .sstable_file_metas
@@ -613,5 +622,15 @@ mod test {
         let sstable = SSTable::from_file(file).unwrap();
 
         assert_eq!(format!("{:}", sstable), "(key: 0,value: 0)(key: 1,value: 1)(key: 2,value: 2)(key: 3,value: 3)(key: 4,value: 4)(key: 5,value: 5)(key: 6,value: 6)(key: 7,value: 7)(key: 8,value: 8)(key: 9,value: 9)");
+    }
+    #[test]
+    fn test_all_file_id() {
+        let level = build_level();
+        let ids=level.get_all_file_id();
+        assert!(ids.contains(&0));
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&2));
+
+        assert_eq!(ids.len(), 3);
     }
 }
