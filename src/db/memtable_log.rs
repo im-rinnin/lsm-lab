@@ -10,12 +10,14 @@ use std::io::{BufWriter, Read, Seek, Write};
 use crate::db::key::Key;
 use crate::db::value::Value;
 
+use super::config::Config;
 use super::db_metrics::TimeRecorder;
 use super::key::KEY_SIZE_LIMIT;
 use super::value::VALUE_SIZE_LIMIT;
 
 pub struct MemtableLog {
     buf_writer: BufWriter<File>,
+    config: Config,
 }
 
 struct KVEntry {
@@ -25,12 +27,15 @@ struct KVEntry {
 }
 
 impl MemtableLog {
-    pub fn new(file: File) -> Self {
+    pub fn new(file: File, config: Config) -> Self {
         let buffer = BufWriter::new(file);
 
-        MemtableLog { buf_writer: buffer }
+        MemtableLog {
+            buf_writer: buffer,
+            config,
+        }
     }
-    pub fn add(&mut self, key: &Key, value: &Option<Value>) -> Result<()> {
+    pub fn add(&mut self, key: &Key, value: Option<&Value>) -> Result<()> {
         key.serialize(&mut Serializer::new(&mut self.buf_writer))?;
         value.serialize(&mut Serializer::new(&mut self.buf_writer))?;
         Ok(())
@@ -38,6 +43,10 @@ impl MemtableLog {
 
     pub fn flush_buf(&mut self) -> Result<()> {
         self.buf_writer.flush()?;
+        let file = self.buf_writer.get_mut();
+        if self.config.sync_write {
+            file.sync_data()?;
+        }
         Ok(())
     }
     pub fn sync_all(&mut self) -> Result<()> {
@@ -87,7 +96,7 @@ mod test {
 
     use tempfile::{tempdir, tempfile};
 
-    use crate::db::{key::Key, memtable::MemtableIter, value::Value};
+    use crate::db::{config::Config, key::Key, memtable::MemtableIter, value::Value};
 
     use super::{MemtableLog, MemtableLogReader};
 
@@ -98,16 +107,15 @@ mod test {
         let dir = tempdir().unwrap();
         let path = dir.into_path().join("test");
         let file = File::create(&path).unwrap();
-
-        let mut log = MemtableLog::new(file);
+        let mut log = MemtableLog::new(file, Config::new());
         let key_1 = Key::new("1");
         let value_1 = Value::new("1");
 
         let key_2 = Key::new("2");
         let value_2 = Value::new("2");
 
-        log.add(&key_1, &Some(value_1.clone())).unwrap();
-        log.add(&key_2, &Some(value_2)).unwrap();
+        log.add(&key_1, Some(&value_1.clone())).unwrap();
+        log.add(&key_2, Some(&value_2)).unwrap();
 
         log.sync_all().unwrap();
 

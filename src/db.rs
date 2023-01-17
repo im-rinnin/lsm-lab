@@ -46,6 +46,7 @@ use self::memtable::MemtableIter;
 use self::memtable_log::MemtableLogReader;
 use self::meta_log::MetaLogIter;
 use self::sstable::SStableBlockMeta;
+use self::write_batch::{Operation, WriteBatch};
 
 mod common;
 pub mod config;
@@ -59,6 +60,7 @@ mod memtable_log;
 mod meta_log;
 mod sstable;
 pub mod value;
+pub mod write_batch;
 
 mod version;
 
@@ -94,20 +96,16 @@ pub struct DBClient {
 }
 
 pub struct WriteRequest {
-    key: Key,
-    value: Option<Value>,
+    wirte_batch: WriteBatch,
     finish: Sender<()>,
 }
 
 impl WriteRequest {
-    pub fn size(&self) -> usize {
-        let key_size = self.key.len();
-        let value_size = if let Some(v) = &self.value {
-            v.len()
-        } else {
-            0
-        };
-        key_size + value_size
+    pub fn new(sender: Sender<()>, write_batch: WriteBatch) -> Self {
+        WriteRequest {
+            wirte_batch: write_batch,
+            finish: sender,
+        }
     }
 }
 
@@ -168,19 +166,22 @@ impl DBClient {
     }
 
     pub fn delete(&mut self, key: &Key) -> Result<()> {
-        self.put_impl(key, None)
+        let mut batch = WriteBatch::new();
+        batch.delete(key.clone());
+        self.put_impl(batch)
     }
 
     pub fn put(&mut self, key: &Key, value: Value) -> Result<()> {
-        self.put_impl(key, Some(value))
+        let mut batch = WriteBatch::new();
+        batch.put(key.clone(), value);
+        self.put_impl(batch)
     }
-    fn put_impl(&mut self, key: &Key, value: Option<Value>) -> Result<()> {
+    pub fn write_batch(&mut self, write_batch: WriteBatch) -> Result<()> {
+        self.put_impl(write_batch)
+    }
+    fn put_impl(&mut self, write_batch: WriteBatch) -> Result<()> {
         let time_recorder = TimeRecorder::new(WRITE_REQUEST_TIME);
-        let write_request = WriteRequest {
-            key: key.clone(),
-            value: value,
-            finish: self.finish_notify_sender.clone(),
-        };
+        let write_request = WriteRequest::new(self.finish_notify_sender.clone(), write_batch);
         self.write_request_sender.send(write_request).unwrap();
         let _ = self.finish_notify_receiver.recv()?;
         Ok(())
@@ -207,7 +208,7 @@ impl DBServer {
 
         let memtable = Memtable::new();
         for (k, v) in memtable_log_iter {
-            memtable.insert_option_value(&k, &v)
+            memtable.insert_option_value(&k, v.as_ref())
         }
         Ok(memtable)
     }
@@ -436,7 +437,7 @@ impl DBServer {
         metric: Arc<DBMetric>,
         memtable_log_file: File,
     ) -> Result<()> {
-        let mut memtable_log = MemtableLog::new(memtable_log_file);
+        let mut memtable_log = MemtableLog::new(memtable_log_file, config.clone());
         let mut request_buffer: Vec<WriteRequest> = Vec::new();
 
         let mut channal_is_open = true;
@@ -690,8 +691,20 @@ fn write_to_memtable(
     drop(lock_result);
     // write data to memtable
     while let Some(request) = request_buffer.pop() {
-        memtable.insert_option_value(&request.key, &request.value);
-        *memtable_size += request.size();
+        let batch = &request.wirte_batch;
+        for op in batch.to_opertions() {
+            match op {
+                Operation::PUT { key, value } => {
+                    memtable.insert_option_value(key, Some(value));
+                }
+                Operation::DELETE { key } => {
+                    memtable.insert_option_value(key, None);
+                }
+            }
+        }
+
+        // memtable.insert_option_value(&request.key, &request.value);
+        *memtable_size += batch.size();
 
         // TODO: log error;
         let current_level_0_len = metric.get_level_n_file_number(0);
@@ -749,9 +762,18 @@ fn save_to_log(
             }
             Ok(request) => {
                 trace!("received write request");
-                let request_size = request.size();
-                write_size_count += request_size;
-                memtable_log.add(&request.key, &request.value)?;
+                let batch = &request.wirte_batch;
+                write_size_count += batch.size();
+                for op in batch.to_opertions() {
+                    match op {
+                        Operation::PUT { key, value } => {
+                            memtable_log.add(key, Some(value))?;
+                        }
+                        Operation::DELETE { key } => {
+                            memtable_log.add(key, None)?;
+                        }
+                    }
+                }
                 request_buffer.push(request);
                 if write_size_count > config.request_write_batch_size {
                     memtable_log.flush_buf()?;
@@ -786,6 +808,7 @@ mod test {
 
     use super::debug_util::{dump_recv, init_test_log_as_debug_and_metric};
     use super::file_storage::FileStorageManager;
+    use super::write_batch::WriteBatch;
     use super::DBClient;
 
     fn build_config_for_test() -> Config {
@@ -1002,5 +1025,23 @@ mod test {
 
         assert!(fs::metadata(file_path_1).is_err());
         assert!(fs::metadata(file_path_2).is_err());
+    }
+    #[test]
+    fn test_write_batch() {
+        let dir = tempdir().unwrap();
+        let s = DBServer::new(dir.path().to_path_buf()).unwrap();
+        let mut c = s.new_client().unwrap();
+        let mut batch = WriteBatch::new();
+        batch.put(Key::from_u64(1), Value::from_u64(1));
+        batch.put(Key::from_u64(2), Value::from_u64(2));
+        batch.delete(Key::from_u64(1));
+
+        c.write_batch(batch).unwrap();
+
+        assert!(c.get(&Key::from_u64(1)).unwrap().is_none());
+        assert_eq!(
+            c.get(&Key::from_u64(2)).unwrap().unwrap(),
+            Value::from_u64(2)
+        );
     }
 }

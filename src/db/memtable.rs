@@ -36,8 +36,9 @@ impl Memtable {
         MemtableIter(heap)
     }
 
-    pub fn insert_option_value(&self, key: &Key, value: &Option<Value>) {
-        self.hash_map.insert(key.clone(), value.clone());
+    pub fn insert_option_value(&self, key: &Key, value: Option<&Value>) {
+        let t = value.map(|v| v.clone());
+        self.hash_map.insert(key.clone(), t);
     }
 
     pub fn insert(&self, key: &Key, value: &Value) {
@@ -93,10 +94,19 @@ mod test {
         memtable.insert(&Key::new("b"), &Value::new("b"));
         memtable.insert(&Key::new("c"), &Value::new("c"));
 
-        assert_eq!(memtable.get(&Key::new("a")).unwrap().unwrap(), Value::new("a"));
-        assert_eq!(memtable.get(&Key::new("b")).unwrap().unwrap(), Value::new("b"));
+        assert_eq!(
+            memtable.get(&Key::new("a")).unwrap().unwrap(),
+            Value::new("a")
+        );
+        assert_eq!(
+            memtable.get(&Key::new("b")).unwrap().unwrap(),
+            Value::new("b")
+        );
         memtable.insert(&Key::new("a"), &Value::new("aa"));
-        assert_eq!(memtable.get(&Key::new("a")).unwrap().unwrap(), Value::new("aa"));
+        assert_eq!(
+            memtable.get(&Key::new("a")).unwrap().unwrap(),
+            Value::new("aa")
+        );
         assert_eq!(memtable.delete(&Key::new("c")).unwrap(), Value::new("c"));
         assert!(memtable.get(&Key::new("c")).unwrap().is_none());
     }

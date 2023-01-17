@@ -12,6 +12,7 @@ pub struct Config {
     pub memtable_log_file_path: String,
     pub request_write_batch_size: usize,
     pub request_write_buffer_wait_time: Duration,
+    pub sync_write: bool,
 }
 
 impl Config {
@@ -27,6 +28,7 @@ impl Config {
             memtable_log_file_path: String::from("memtable_log"),
             request_write_batch_size: 1 << 20,
             request_write_buffer_wait_time: Duration::from_micros(5),
+            sync_write: false,
         }
     }
 }
